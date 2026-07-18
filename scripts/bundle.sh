@@ -19,6 +19,7 @@ rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp "$BIN" "$CONTENTS/MacOS/Roundtable"
 cp Resources/Info.plist "$CONTENTS/Info.plist"
+cp Resources/AppIcon.icns "$CONTENTS/Resources/AppIcon.icns"
 
 echo "[sign] ad-hoc codesign"
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true

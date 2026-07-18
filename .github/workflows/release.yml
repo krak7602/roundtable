@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create the release and upload assets
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Build and bundle the app
+        run: ./scripts/bundle.sh release
+
+      - name: Create DMG
+        run: |
+          mkdir -p dmg-staging
+          cp -R Roundtable.app dmg-staging/
+          ln -s /Applications dmg-staging/Applications
+          hdiutil create -volname Roundtable -srcfolder dmg-staging \
+            -ov -format UDZO Roundtable.dmg
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Roundtable.dmg
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            ## Roundtable
+
+            Open **Roundtable.dmg** and drag `Roundtable.app` into the Applications
+            folder. Look for the four-dot icon in your menu bar.
+
+            This build is ad-hoc signed (not yet notarized), so macOS Gatekeeper
+            will complain on first launch. To open it:
+
+            - Right-click the app and choose **Open**, then confirm, **or**
+            - Run `xattr -dr com.apple.quarantine /Applications/Roundtable.app`
+
+            Requires macOS 14 or later.

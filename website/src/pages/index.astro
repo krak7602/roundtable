@@ -1,0 +1,213 @@
+---
+import Base from '../layouts/Base.astro';
+
+const repo = 'https://github.com/krak7602/roundtable';
+const download = `${repo}/releases/latest/download/Roundtable.dmg`;
+const sponsor = 'https://github.com/sponsors/krak7602';
+
+// Sorted the way the app sorts: the ones that need you float to the top,
+// working ones sink. Deliberately generic demo data, not anyone's real work.
+const sessions = [
+  { dot: '🔴', name: 'api-gateway', tag: 'codex', proj: 'infra', last: 'Approve running `terraform apply`?' },
+  { dot: '🟢', name: 'checkout-flow', tag: 'claude', proj: 'storefront', last: 'Done. 24 tests passing.' },
+  { dot: '🟡', name: 'search-index', tag: 'omp', proj: 'backend', last: 'Reindexing the catalog…' },
+];
+
+const features = [
+  { t: 'One list, always sorted', d: 'Every harness in a single menu, the ones that need you floated to the top, with real session names.', p: 'M4 6h16M4 12h16M4 18h10' },
+  { t: 'Alerts that do not interrupt', d: 'A quiet toast in the menu bar, or a floating pill that shows over full-screen apps where the menu bar is hidden.', p: 'M12 3a6 6 0 0 0-6 6c0 5-2 6-2 6h16s-2-1-2-6a6 6 0 0 0-6-6zM10.5 20a1.5 1.5 0 0 0 3 0' },
+  { t: 'It sees permission prompts', d: 'The one thing reading transcripts cannot do. One toggle installs each harness hook so you know the instant an agent is blocked.', p: 'M12 3l7 4v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V7l7-4zM9.5 12l1.8 1.8L15 10' },
+  { t: 'Click to jump there', d: 'Go straight to the session that needs you, the right terminal or project workspace comes to the front.', p: 'M5 12h13M13 6l6 6-6 6' },
+  { t: 'Only what is running', d: 'A session shows up when a live process actually exists, matched to its transcript by working directory. No stale noise.', p: 'M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0-18 0M12 8v4l3 2' },
+  { t: 'Zero config to start', d: 'It reads your agents own files. Nothing to set up before it works. Enhanced detection is opt-in when you want it.', p: 'M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1' },
+];
+
+const harnesses = ['Claude Code', 'Codex', 'Pi', 'Oh My Pi'];
+---
+
+<Base>
+  <!-- nav -->
+  <nav class="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="/">
+        <img src="/logo.svg" alt="" />
+        Roundtable
+      </a>
+      <div class="nav-links">
+        <a href="#features" class="hide-sm">Features</a>
+        <a href="#harnesses" class="hide-sm">Harnesses</a>
+        <a href={repo}>GitHub</a>
+        <a class="btn btn-primary btn-sm" href={download}>Download</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- hero -->
+  <header class="hero">
+    <div class="glow"></div>
+    <div class="wrap hero-grid">
+      <div>
+        <span class="eyebrow">macOS menu bar · reads your agents' own files</span>
+        <h1>Every AI coding session, <span class="amber">one glance.</span></h1>
+        <p class="sub">
+          You run three agents at once. Roundtable watches them all and tells you
+          the moment one finishes, asks a question, or needs your approval.
+        </p>
+        <div class="hero-cta">
+          <a class="btn btn-primary" href={download}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
+            Download for macOS
+          </a>
+          <a class="btn btn-ghost" href={repo}>View on GitHub</a>
+        </div>
+        <p class="hero-note">Free and open source. macOS 14+. Works with Claude Code, Codex, Pi, and Oh My Pi.</p>
+      </div>
+
+      <!-- the app, in action, on a macOS screen -->
+      <div class="mock">
+        <div class="screen">
+          <div class="os-bar">
+            <div class="notch"></div>
+            <div class="left">
+              <span class="app">Terminal</span>
+              <span>File</span><span>Edit</span><span>View</span><span>Window</span><span>Help</span>
+            </div>
+            <div class="right">
+              <span class="rt"><span class="dots"><i></i><i></i><i></i><i></i></span><span class="badge">2</span></span>
+              <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="2.4" height="4" rx="1"/><rect x="4" y="5" width="2.4" height="6" rx="1"/><rect x="8" y="3" width="2.4" height="8" rx="1"/><rect x="12" y="1" width="2.4" height="10" rx="1"/></svg>
+              <svg width="15" height="12" viewBox="0 0 15 12" fill="currentColor"><path d="M7.5 2C4.7 2 2.3 3.1 0.6 4.9l1.4 1.4C3.4 4.9 5.4 4 7.5 4s4.1 0.9 5.5 2.3l1.4-1.4C12.7 3.1 10.3 2 7.5 2zM7.5 6c-1.4 0-2.6 0.5-3.5 1.4l1.4 1.4c0.6-0.5 1.3-0.8 2.1-0.8s1.5 0.3 2.1 0.8l1.4-1.4C10.1 6.5 8.9 6 7.5 6zM7.5 9.4L6 10.9c0.4 0.4 0.9 0.6 1.5 0.6s1.1-0.2 1.5-0.6L7.5 9.4z"/></svg>
+              <svg width="24" height="12" viewBox="0 0 24 12" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="1.5" width="20" height="9" rx="2.5"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor" stroke="none"/><path d="M22.2 4.2v3.6" stroke-width="1.6" stroke-linecap="round"/></svg>
+              <span class="clock">Fri 18 Jul&nbsp;&nbsp;9:41</span>
+            </div>
+          </div>
+
+          <!-- the terminal this all sits over: the agent that's blocked -->
+          <div class="os-win">
+            <div class="win-bar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span><span class="win-t">api-gateway — codex</span></div>
+            <div class="win-body">
+              <p><span class="pfx">›</span> add a rate limiter to the gateway</p>
+              <p class="dim">edited middleware/ratelimit.go</p>
+              <p class="dim">edited gateway/config.go</p>
+              <p class="dim">running the plan against staging</p>
+              <p class="ask">Approve running <span class="cmd">terraform apply</span>? <span class="cur"></span></p>
+            </div>
+          </div>
+
+          <div class="os-toast"><span class="tdot"></span> api-gateway — needs permission</div>
+
+          <span class="os-caret"></span>
+          <div class="os-menu">
+            <div class="head"><span class="t">Roundtable</span><span class="n">2 waiting</span></div>
+            {sessions.map((s) => (
+              <div class="os-row">
+                <span class="st">{s.dot}</span>
+                <div class="body">
+                  <div class="top"><span class="name">{s.name}</span><span class="tag">{s.tag}</span><span class="proj">{s.proj}</span></div>
+                  <div class="last">{s.last}</div>
+                </div>
+              </div>
+            ))}
+            <div class="os-foot"><a>Settings…</a><a>Quit</a></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- problem -->
+  <section class="problem">
+    <div class="wrap section">
+      <p>The hard part isn't the work anymore. It's knowing <span class="hl">which session is waiting.</span></p>
+      <p class="small">
+        Agents run on their own now. Kick one off, switch to another, and a few minutes later
+        you're tabbing through terminals trying to find the one that stopped for you. Roundtable
+        is the layer that just tells you.
+      </p>
+    </div>
+  </section>
+
+  <!-- features -->
+  <section id="features">
+    <div class="wrap section">
+      <h2>Built to keep you out of the tab-hunt.</h2>
+      <p class="lead">It sits above your harness and your terminal. It doesn't replace either one.</p>
+      <div class="features">
+        {features.map((f) => (
+          <div class="card">
+            <div class="ic">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d={f.p}/></svg>
+            </div>
+            <h3>{f.t}</h3>
+            <p>{f.d}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <!-- harnesses -->
+  <section id="harnesses" class="problem">
+    <div class="wrap section">
+      <h2>Works with the agents you already use.</h2>
+      <p class="lead">Waiting and working come straight from each harness's own transcript, no setup. Permission prompts come through each harness's hook, installed with one toggle.</p>
+      <div class="harness-row">
+        {harnesses.map((h) => (<span class="chip"><span class="g"></span>{h}</span>))}
+      </div>
+      <p class="lead" style="margin-top:22px">
+        Click-to-focus supports iTerm2, tmux, muxy, Ghostty, and more, landing as precisely as
+        each terminal allows.
+      </p>
+    </div>
+  </section>
+
+  <!-- privacy -->
+  <section>
+    <div class="wrap section">
+      <h2>Local by default.</h2>
+      <div class="privacy">
+        <div class="pcard">
+          <h3>Nothing leaves your machine</h3>
+          <p>Roundtable reads on-disk transcripts and running processes locally. It makes no network calls.</p>
+        </div>
+        <div class="pcard">
+          <h3>Your configs are backed up</h3>
+          <p>Turning on permission detection edits a harness config file, and backs up the original first. Every toggle is reversible.</p>
+        </div>
+        <div class="pcard">
+          <h3>Open source, MIT</h3>
+          <p>Read every line. It's a small Swift app you can build yourself in one command.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- download cta -->
+  <section class="cta">
+    <div class="wrap">
+      <h2>Stop hunting for the session that's waiting.</h2>
+      <p>Download the app, or build it from source in a minute.</p>
+      <div class="buttons">
+        <a class="btn btn-primary" href={download}>Download for macOS</a>
+        <a class="btn btn-ghost" href={sponsor}>Sponsor the project</a>
+      </div>
+      <div class="codeblock">
+        <div class="cb-head">build from source</div>
+        <pre><span class="c">git</span> clone {repo}.git
+<span class="c">cd</span> roundtable
+<span class="c">./scripts/bundle.sh</span> && <span class="c">open</span> Roundtable.app</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- footer -->
+  <footer>
+    <div class="wrap foot-inner">
+      <div>Roundtable · MIT licensed · built by <a href="https://rahulkrishna.dev" style="color:var(--text-dim)">Rahul Krishna</a></div>
+      <div class="foot-links">
+        <a href={repo}>GitHub</a>
+        <a href={sponsor}>Sponsor</a>
+        <a href={`${repo}/releases`}>Releases</a>
+      </div>
+    </div>
+  </footer>
+</Base>

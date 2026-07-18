@@ -1,0 +1,310 @@
+:root {
+  --bg: #0b0b0d;
+  --bg-panel: #141417;
+  --bg-panel-2: #191a1e;
+  --border: #26262c;
+  --border-soft: #1e1e23;
+  --text: #ececee;
+  --text-dim: #a0a0a8;
+  --text-faint: #6c6c76;
+  --amber: #faad1c;
+  --amber-soft: rgba(250, 173, 28, 0.14);
+  --green: #58d977;
+  --red: #f2564b;
+  --yellow: #f2c14b;
+  --radius: 14px;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "kern", "liga", "cv11";
+  overflow-x: hidden;
+}
+
+a { color: inherit; text-decoration: none; }
+
+.wrap { width: 100%; max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+/* --- ambient glow behind hero --- */
+.glow {
+  position: absolute; inset: 0; z-index: 0; pointer-events: none; overflow: hidden;
+}
+.glow::before {
+  content: ""; position: absolute; top: -380px; left: 50%; transform: translateX(-50%);
+  width: 1300px; height: 860px;
+  background: radial-gradient(ellipse at center, rgba(250, 173, 28, 0.10), transparent 68%);
+  filter: blur(64px);
+}
+
+/* --- nav --- */
+.nav {
+  position: sticky; top: 0; z-index: 40;
+  backdrop-filter: saturate(1.4) blur(14px);
+  background: rgba(11, 11, 13, 0.5);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+}
+.nav-inner { display: flex; align-items: center; justify-content: space-between; height: 62px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 650; letter-spacing: -0.01em; }
+.brand img { width: 24px; height: 24px; }
+.nav-links { display: flex; align-items: center; gap: 22px; }
+.nav-links a:not(.btn) { color: var(--text-dim); font-size: 14px; transition: color 0.15s; }
+.nav-links a:not(.btn):hover { color: var(--text); }
+
+/* --- buttons --- */
+.btn {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-weight: 600; font-size: 15px; padding: 11px 20px; border-radius: 10px;
+  border: 1px solid transparent; transition: transform 0.12s, box-shadow 0.2s, background 0.15s;
+  cursor: pointer;
+}
+.btn-primary {
+  background: var(--amber); color: #17130a;
+  box-shadow: 0 6px 24px rgba(250, 173, 28, 0.24);
+}
+.btn-primary:hover { transform: translateY(-1px); box-shadow: 0 10px 30px rgba(250, 173, 28, 0.34); }
+.btn-ghost { background: var(--bg-panel); color: var(--text); border-color: var(--border); }
+.btn-ghost:hover { border-color: #3a3a42; background: var(--bg-panel-2); }
+.btn-sm { padding: 8px 15px; font-size: 14px; }
+
+/* --- hero --- */
+.hero { position: relative; padding: 92px 0 40px; overflow: hidden; }
+.hero-grid { position: relative; z-index: 1; display: grid; grid-template-columns: 400px minmax(0, 1fr); gap: 44px; align-items: center; }
+.hero-grid > * { min-width: 0; }
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--amber); background: var(--amber-soft);
+  border: 1px solid rgba(250, 173, 28, 0.24); padding: 5px 12px; border-radius: 999px; margin-bottom: 22px;
+}
+.hero h1 {
+  font-size: 52px; line-height: 1.05; letter-spacing: -0.03em; font-weight: 700;
+  overflow-wrap: break-word;
+}
+.hero h1 .amber { color: var(--amber); }
+.hero .sub { margin-top: 20px; font-size: 18px; color: var(--text-dim); max-width: 32ch; }
+.hero-cta { display: flex; align-items: center; gap: 14px; margin-top: 30px; flex-wrap: wrap; }
+.hero-note { margin-top: 16px; font-size: 13px; color: var(--text-faint); }
+.hero-note code { font-family: var(--mono); color: var(--text-dim); }
+
+/* --- mockup: a macOS screen with Roundtable running --- */
+/* Sized in container units (cqw = 1% of .mock width) so the whole thing scales
+   as one piece from desktop down to phone. .mock is the query container. */
+/* The left edge fades into the page (the empty desktop there isn't wasted). On a
+   wide viewport the monitor also bleeds past the right edge so it reads bigger;
+   that bleed is added back in only where the centered content has side margin to
+   absorb it (see the min-width rule below), so it never clips or scrolls. */
+.mock { position: relative; container-type: inline-size; }
+.screen {
+  position: relative; border-radius: 1.9cqw; overflow: hidden;
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(120% 80% at 74% -10%, rgba(250, 173, 28, 0.12), transparent 55%),
+    linear-gradient(155deg, #221b2b 0%, #14131b 46%, #0c0c11 100%);
+  aspect-ratio: 16 / 10;
+  -webkit-mask: linear-gradient(90deg, transparent 0, #000 16%);
+  mask: linear-gradient(90deg, transparent 0, #000 16%);
+}
+
+/* system menu bar, with the notch */
+.os-bar {
+  position: relative; display: flex; align-items: center; justify-content: space-between;
+  height: 3.8cqw; padding: 0 1.35cqw; font-size: 1.2cqw; color: var(--text-dim);
+  background: rgba(14, 14, 18, 0.55); backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.notch {
+  position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+  width: 17cqw; height: 3.1cqw; background: #040405; border-radius: 0 0 1.5cqw 1.5cqw; z-index: 3;
+}
+.os-bar .left { display: flex; align-items: center; gap: 1.5cqw; opacity: 0.6; }
+.os-bar .left .app { color: var(--text); font-weight: 650; }
+.os-bar .left span:not(.app) { color: var(--text-faint); }
+.os-bar .right { display: flex; align-items: center; gap: 1.25cqw; color: var(--text-faint); }
+.os-bar .right svg { height: 1.1cqw; width: auto; }
+.os-bar .clock { color: var(--text-dim); white-space: nowrap; }
+/* our menu-bar item: the grid glyph with the badge on its top-right corner */
+.os-bar .rt {
+  position: relative; display: inline-flex; align-items: center; color: var(--text);
+  padding: 0.15cqw; margin-right: 0.3cqw;
+}
+.dots { display: grid; grid-template-columns: 0.72cqw 0.72cqw; gap: 0.3cqw; }
+.dots i { width: 0.72cqw; height: 0.72cqw; border-radius: 50%; background: currentColor; display: block; }
+.badge {
+  position: absolute; top: -0.5cqw; right: -0.85cqw;
+  min-width: 1.5cqw; height: 1.5cqw; padding: 0 0.3cqw; display: grid; place-items: center;
+  background: var(--amber); color: #17130a; font-size: 1.05cqw; font-weight: 700;
+  border-radius: 999px; box-shadow: 0 0 0 0.17cqw #14131b;
+}
+
+/* the terminal window the scene sits over: fills the desktop so the monitor
+   doesn't read as empty, and shows the exact prompt the toast is announcing. */
+.os-win {
+  position: absolute; left: 3.5cqw; right: 3.5cqw; top: 5.6cqw; bottom: 4.5cqw;
+  background: rgba(13, 13, 17, 0.94); backdrop-filter: blur(3px);
+  border: 1px solid rgba(255, 255, 255, 0.09); border-radius: 1.2cqw; overflow: hidden;
+  box-shadow: 0 2.5cqw 6cqw rgba(0, 0, 0, 0.5);
+}
+.win-bar {
+  display: flex; align-items: center; gap: 0.7cqw; height: 3cqw; padding: 0 1.4cqw;
+  background: rgba(255, 255, 255, 0.05); border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.tl { width: 1.05cqw; height: 1.05cqw; border-radius: 50%; }
+.tl.r { background: #ff5f57; } .tl.y { background: #febc2e; } .tl.g { background: #28c840; }
+.win-t { margin-left: 0.9cqw; font-size: 1.15cqw; color: rgba(255, 255, 255, 0.55); }
+.win-body { padding: 1.7cqw 1.9cqw; font-family: var(--mono); font-size: 1.25cqw; line-height: 2.1; }
+.win-body p { color: rgba(255, 255, 255, 0.72); }
+.win-body .pfx { color: var(--amber); margin-right: 0.7cqw; }
+.win-body .dim { color: rgba(255, 255, 255, 0.4); }
+.win-body .ask { color: #fff; margin-top: 0.7cqw; }
+.win-body .cmd { color: var(--amber); }
+.win-body .cur {
+  display: inline-block; width: 0.9cqw; height: 1.5cqw; vertical-align: text-bottom;
+  background: var(--amber); margin-left: 0.3cqw; animation: blink 1.1s steps(1) infinite;
+}
+@keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+
+/* floating attention toast: just below the notch, center. The menu sits to its
+   right, so both fit side by side on the bigger screen. */
+.os-toast {
+  position: absolute; top: 5.3cqw; left: 50%; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 0.9cqw; white-space: nowrap;
+  background: rgba(30, 22, 7, 0.84); border: 1px solid rgba(250, 173, 28, 0.55);
+  color: #fff; padding: 0.9cqw 1.6cqw; border-radius: 999px; font-size: 1.28cqw; font-weight: 600;
+  box-shadow: 0 1.7cqw 4.5cqw rgba(0, 0, 0, 0.55); backdrop-filter: blur(8px);
+  animation: floaty 4.5s ease-in-out infinite;
+}
+.os-toast .tdot { width: 0.9cqw; height: 0.9cqw; border-radius: 50%; background: var(--amber); box-shadow: 0 0 1cqw var(--amber); }
+@keyframes floaty { 0%, 100% { transform: translate(-50%, 0); } 50% { transform: translate(-50%, -0.55cqw); } }
+
+/* the popover caret, pointing up from the menu toward our menu-bar icon */
+.os-caret {
+  position: absolute; z-index: 4; top: 4.8cqw; right: 20cqw;
+  width: 2.2cqw; height: 2.2cqw; background: rgba(28, 28, 34, 0.98);
+  border-top: 1px solid rgba(255, 255, 255, 0.14); border-left: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.3cqw 0 0 0; transform: rotate(45deg);
+}
+
+/* the menu-bar dropdown (session list), to the right of the toast */
+.os-menu {
+  position: absolute; z-index: 5; top: 5.9cqw; right: 2.2cqw; width: 30cqw;
+  background: rgba(22, 22, 27, 0.95); backdrop-filter: blur(20px);
+  border: 1px solid var(--border); border-radius: 1.3cqw; overflow: hidden;
+  box-shadow: 0 3cqw 7cqw rgba(0, 0, 0, 0.62);
+}
+.os-menu .head { display: flex; align-items: center; justify-content: space-between; padding: 1cqw 1.35cqw; border-bottom: 1px solid var(--border-soft); }
+.os-menu .head .t { font-weight: 650; font-size: 1.28cqw; }
+.os-menu .head .n { font-size: 1.15cqw; color: var(--green); font-weight: 600; }
+.os-row { display: flex; gap: 1cqw; padding: 1cqw 1.35cqw; border-bottom: 1px solid var(--border-soft); }
+.os-row .st { font-size: 1.28cqw; }
+.os-row .body { min-width: 0; flex: 1; }
+.os-row .top { display: flex; align-items: center; gap: 0.7cqw; }
+.os-row .name { font-weight: 640; font-size: 1.28cqw; white-space: nowrap; }
+.os-row .tag { font-size: 1cqw; color: var(--text-faint); border: 1px solid var(--border); border-radius: 999px; padding: 0.15cqw 0.55cqw; }
+.os-row .proj { font-size: 1.1cqw; color: var(--text-faint); margin-left: auto; }
+.os-row .last { color: var(--text-faint); font-size: 1.2cqw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 0.15cqw; }
+.os-foot { display: flex; align-items: center; justify-content: space-between; padding: 0.85cqw 1.35cqw; color: var(--text-faint); font-size: 1.2cqw; }
+.os-foot a { color: var(--text-faint); }
+
+/* --- sections --- */
+section { position: relative; }
+.section { padding: 68px 0; }
+.section h2 { font-size: 32px; letter-spacing: -0.02em; font-weight: 700; }
+.section .lead { margin-top: 12px; color: var(--text-dim); font-size: 17px; max-width: 60ch; }
+
+.problem { border-top: 1px solid var(--border-soft); border-bottom: 1px solid var(--border-soft); background: #0d0d10; }
+.problem p { font-size: 24px; line-height: 1.4; letter-spacing: -0.01em; max-width: 26ch; }
+.problem .hl { color: var(--amber); }
+.problem .small { font-size: 16px; color: var(--text-dim); margin-top: 18px; max-width: 52ch; }
+
+.features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 36px; }
+.card { background: var(--bg-panel); border: 1px solid var(--border-soft); border-radius: var(--radius); padding: 22px; transition: border-color 0.2s, transform 0.2s; }
+.card:hover { border-color: var(--border); transform: translateY(-2px); }
+.card .ic { width: 34px; height: 34px; border-radius: 9px; background: var(--amber-soft); color: var(--amber); display: grid; place-items: center; margin-bottom: 14px; }
+.card h3 { font-size: 16px; font-weight: 650; }
+.card p { margin-top: 7px; color: var(--text-dim); font-size: 14.5px; }
+
+.harness-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+.chip { display: inline-flex; align-items: center; gap: 9px; background: var(--bg-panel); border: 1px solid var(--border); border-radius: 999px; padding: 9px 16px; font-weight: 600; font-size: 14.5px; }
+.chip .g { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+
+.privacy { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 34px; }
+.pcard { border: 1px solid var(--border-soft); border-radius: var(--radius); padding: 20px; }
+.pcard h3 { font-size: 15px; font-weight: 650; margin-bottom: 8px; }
+.pcard p { color: var(--text-dim); font-size: 14px; }
+
+/* --- download cta --- */
+.cta { text-align: center; padding: 84px 0; }
+.cta h2 { font-size: 36px; letter-spacing: -0.02em; }
+.cta p { color: var(--text-dim); margin-top: 12px; font-size: 17px; }
+.cta .buttons { margin-top: 28px; display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+.codeblock {
+  margin: 26px auto 0; max-width: 520px; text-align: left;
+  background: #08080a; border: 1px solid var(--border); border-radius: 12px;
+  font-family: var(--mono); font-size: 13.5px; color: var(--text-dim); overflow: hidden;
+}
+.codeblock .cb-head { padding: 8px 14px; border-bottom: 1px solid var(--border-soft); color: var(--text-faint); font-size: 12px; }
+.codeblock pre { padding: 14px 16px; overflow-x: auto; }
+.codeblock .c { color: var(--amber); }
+
+/* --- footer --- */
+footer { border-top: 1px solid var(--border-soft); padding: 40px 0; color: var(--text-faint); font-size: 14px; }
+.foot-inner { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+.foot-links { display: flex; gap: 22px; }
+.foot-links a { color: var(--text-dim); }
+.foot-links a:hover { color: var(--text); }
+
+/* --- responsive --- */
+/* Bleed the monitor past the right edge only once the centered content column
+   has margin to spare (wrap is 1080, bleed is 120 each side needs ~1320). */
+@media (min-width: 1320px) {
+  .mock { margin-right: -120px; }
+}
+@media (max-width: 860px) {
+  /* Stack: the text becomes a normal full-width block that wraps, the mockup
+     sits below it at full column width. */
+  .hero-grid { display: block; }
+  .hero-grid > div:first-child { margin-bottom: 34px; }
+  .mock { margin-right: 0; }  /* full width when stacked, no bleed */
+  .hero h1 { font-size: clamp(36px, 9vw, 52px); }
+  .features, .privacy { grid-template-columns: 1fr; }
+  .nav-links .hide-sm { display: none; }
+}
+@media (max-width: 480px) {
+  .hero h1 { font-size: clamp(30px, 9vw, 44px); }
+}
+
+/* On a narrow monitor (stacked / phone) the UI would scale to unreadable, so
+   bump the mockup's proportions up via a container query. */
+@container (max-width: 520px) {
+  .os-bar { height: 6.8cqw; padding: 0 2.4cqw; font-size: 2.2cqw; }
+  .notch { width: 30cqw; height: 5.4cqw; border-radius: 0 0 2.6cqw 2.6cqw; }
+  .os-bar .left { gap: 2.6cqw; }
+  .os-bar .right { gap: 2.2cqw; }
+  .os-bar .right svg { height: 2cqw; }
+  .dots { grid-template-columns: 1.3cqw 1.3cqw; gap: 0.55cqw; }
+  .dots i { width: 1.3cqw; height: 1.3cqw; }
+  .badge { top: -0.9cqw; right: -1.5cqw; min-width: 2.7cqw; height: 2.7cqw; font-size: 1.9cqw; }
+  .os-win { top: 10cqw; }
+  .os-caret { top: 9cqw; right: 20cqw; width: 3.4cqw; height: 3.4cqw; }
+  .os-toast { top: 9.4cqw; gap: 1.6cqw; padding: 1.6cqw 2.9cqw; font-size: 2.3cqw; }
+  .os-toast .tdot { width: 1.6cqw; height: 1.6cqw; }
+  .os-menu { top: 10.6cqw; right: 4cqw; width: 54cqw; border-radius: 2.4cqw; }
+  .os-menu .head { padding: 1.8cqw 2.4cqw; }
+  .os-menu .head .t { font-size: 2.3cqw; }
+  .os-menu .head .n { font-size: 2.05cqw; }
+  .os-row { gap: 1.8cqw; padding: 1.8cqw 2.4cqw; }
+  .os-row .st, .os-row .name { font-size: 2.3cqw; }
+  .os-row .tag { font-size: 1.8cqw; }
+  .os-row .proj { font-size: 2cqw; }
+  .os-row .last { font-size: 2.15cqw; }
+  .os-foot { padding: 1.5cqw 2.4cqw; font-size: 2.15cqw; }
+}
