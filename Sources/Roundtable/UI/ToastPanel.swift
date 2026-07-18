@@ -9,9 +9,13 @@ import SwiftUI
 final class ToastPanelWindow {
     static let exitDuration: TimeInterval = 0.42
 
+    /// Called when the user clicks the pill (not the transparent margin around it).
+    var onClick: (() -> Void)?
+
     private let panel: NSPanel
     private let model = ToastPillModel()
     private let host: NSHostingView<ToastPill>
+    private let hit = ToastHitView()
     private var showGeneration = 0
     private let panelSize = NSSize(width: 520, height: 120)
 
@@ -26,10 +30,16 @@ final class ToastPanelWindow {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.level = .screenSaver
-        panel.ignoresMouseEvents = true
+        // The pill catches clicks; everywhere else stays click-through (the hit
+        // view returns nil outside the pill rect, so events fall to the app below).
+        panel.ignoresMouseEvents = false
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        panel.contentView = host
+        host.frame = NSRect(origin: .zero, size: panelSize)
+        host.autoresizingMask = [.width, .height]
+        hit.addSubview(host)
+        hit.onClick = { [weak self] in self?.onClick?() }
+        panel.contentView = hit
     }
 
     var isVisible: Bool { panel.isVisible }
@@ -39,6 +49,8 @@ final class ToastPanelWindow {
         let gen = showGeneration
         model.text = text
         model.accent = accent
+        hit.pillRect = Self.pillRect(for: text, in: panelSize)
+        panel.invalidateCursorRects(for: hit)
         reposition(on: screen)
         panel.alphaValue = 1
         if !panel.isVisible { panel.orderFrontRegardless() }
@@ -67,6 +79,20 @@ final class ToastPanelWindow {
         }
     }
 
+    /// The pill's frame within the panel, mirroring ToastPill's layout (top
+    /// padding, then a fixed-height pill sized to its text), so the hit view
+    /// knows exactly where clicks should count. A few points of slop make the
+    /// whole visible pill comfortably clickable.
+    static func pillRect(for text: String, in size: NSSize) -> NSRect {
+        let font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        let textW = (text as NSString).size(withAttributes: [.font: font]).width
+        let pillW = ceil(textW) + 13 + 8 + 32   // icon + spacing + horizontal padding
+        let pillH: CGFloat = 38
+        let x = (size.width - pillW) / 2
+        let y = size.height - 12 - pillH        // 12 = top padding
+        return NSRect(x: x - 4, y: y - 4, width: pillW + 8, height: pillH + 8)
+    }
+
     private func reposition(on screen: NSScreen) {
         let f = screen.frame
         // Clear the top inset: the menu bar when it's visible, and always the
@@ -80,11 +106,35 @@ final class ToastPanelWindow {
     }
 }
 
+/// Content view for the toast panel: transparent, and click-through everywhere
+/// except over the pill. Returning nil from hitTest outside `pillRect` lets the
+/// mouse event fall through to whatever app is behind the (non-opaque) panel, so
+/// the toast never steals clicks from the full-screen app underneath it.
+final class ToastHitView: NSView {
+    var pillRect: NSRect = .zero
+    var onClick: (() -> Void)?
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        pillRect.contains(point) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) { onClick?() }
+
+    override func resetCursorRects() {
+        guard !pillRect.isEmpty else { return }
+        addCursorRect(pillRect, cursor: .pointingHand)
+    }
+}
+
 /// Manages one ToastPanelWindow per screen, so a toast can appear on the focused
 /// screen or on every screen at once. Windows are reused across toasts.
 @MainActor
 final class ToastPanelController {
     static let exitDuration = ToastPanelWindow.exitDuration
+
+    /// Invoked with (cwd, name) when the user clicks a panel toast that has a
+    /// jump target. Set once by the owner (MenuBarController).
+    var onFocus: ((String, String) -> Void)?
 
     private var windows: [CGDirectDisplayID: ToastPanelWindow] = [:]
 
@@ -105,13 +155,17 @@ final class ToastPanelController {
         }
     }
 
-    func show(text: String, accent: ToastAccent, on screens: [NSScreen]) {
+    func show(text: String, accent: ToastAccent, focusCWD: String?, focusName: String, on screens: [NSScreen]) {
         let targets = Set(screens.map(\.displayID))
         for (id, window) in windows where !targets.contains(id) { window.close() }
         for screen in screens {
             let window = windows[screen.displayID] ?? {
                 let w = ToastPanelWindow(); windows[screen.displayID] = w; return w
             }()
+            // Only a toast with a target is clickable; test toasts stay inert.
+            window.onClick = (focusCWD?.isEmpty == false)
+                ? { [weak self] in self?.onFocus?(focusCWD!, focusName) }
+                : nil
             window.show(text: text, accent: accent, on: screen)
         }
     }

@@ -10,6 +10,15 @@ final class SessionStore: ObservableObject {
 
     @Published private(set) var sessions: [Session] = []
 
+    /// Live permission prompts, keyed by canonical cwd. Populated from harness
+    /// hooks; the menu renders Allow / Deny / Jump for the matching session.
+    @Published private(set) var pendingApprovals: [String: PendingApproval] = [:]
+
+    /// How long after we last saw a prompt we keep showing it. Claude re-nudges
+    /// a still-pending prompt every ~30-60s (which refreshes lastSeen), so a live
+    /// prompt stays; once answered the nudges stop and it ages out.
+    private let approvalTTL: TimeInterval = 90
+
     private let adapters: [any HarnessAdapter]
     private var timer: Timer?
     private let scanQueue = DispatchQueue(label: "roundtable.scan", qos: .utility)
@@ -33,6 +42,55 @@ final class SessionStore: ObservableObject {
 
     var attentionCount: Int {
         sessions.filter(\.needsAttention).count
+    }
+
+    // MARK: - Pending approvals
+
+    /// The prompt (if any) blocking a given session.
+    func pendingApproval(for session: Session) -> PendingApproval? {
+        pendingApprovals.values.first { $0.matches(session, canonical: Self.canonical) }
+    }
+
+    /// Record a permission prompt from a hook. Injectability is resolved off the
+    /// main thread (it shells out to find the pane) and folded back in.
+    func recordApproval(id: String, sessionId: String, cwd: String, harness: Harness, tool: String, command: String?) {
+        guard !(sessionId.isEmpty && cwd.isEmpty) else { return }
+        let key = sessionId.isEmpty ? Self.canonical(cwd) : sessionId
+        let now = Date()
+        let existing = pendingApprovals[key]
+        pendingApprovals[key] = PendingApproval(
+            id: id, sessionId: sessionId, cwd: cwd, harness: harness, tool: tool,
+            command: command ?? existing?.command,
+            createdAt: existing?.createdAt ?? now, lastSeen: now,
+            canAnswer: existing?.canAnswer ?? false)
+
+        let needsCommand = (command?.isEmpty ?? true) && harness == .claudeCode
+        // Off a throwaway queue, not the poll queue: the retry below can sleep up
+        // to a second and must not stall scanning.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let can = AnswerInjector.canAnswer(cwd: cwd)
+            // The hook fires the instant the prompt shows, a beat before the tool
+            // call lands in the transcript, so read-with-retry to catch the command.
+            var enriched: String?
+            if needsCommand {
+                for _ in 0..<6 {
+                    if let c = ClaudeCodeAdapter.pendingCommand(sessionId: sessionId), !c.isEmpty {
+                        enriched = c; break
+                    }
+                    Thread.sleep(forTimeInterval: 0.2)
+                }
+            }
+            Task { @MainActor in
+                guard var pa = self?.pendingApprovals[key] else { return }
+                pa.canAnswer = can
+                if pa.command?.isEmpty ?? true, let enriched { pa.command = enriched }
+                self?.pendingApprovals[key] = pa
+            }
+        }
+    }
+
+    func clearApproval(_ approval: PendingApproval) {
+        pendingApprovals = pendingApprovals.filter { $0.value.id != approval.id }
     }
 
     func start(interval: TimeInterval = 2.0) {
@@ -91,14 +149,11 @@ final class SessionStore: ObservableObject {
     private func apply(_ scanned: [Session]) {
         // Respect per-harness visibility from settings.
         let visible = scanned.filter { AppSettings.shared.isEnabled($0.harness) }
-        // Attention-first, then most-recently-active.
-        let sorted = visible.sorted { a, b in
-            if a.needsAttention != b.needsAttention { return a.needsAttention }
-            return a.updatedAt > b.updatedAt
-        }
 
+        // Edge detection runs on the RAW transcript state, so overlaying a
+        // pending prompt below never double-fires the toast the hook already sent.
         var next: [String: SessionState] = [:]
-        for s in sorted {
+        for s in visible {
             let previous = lastState[s.id]
             if previous != s.state, s.state.needsAttention, previous != nil {
                 onAttentionEdge?(s)
@@ -107,6 +162,29 @@ final class SessionStore: ObservableObject {
         }
         lastState = next   // prune ids that are no longer live
 
-        self.sessions = sorted
+        // Drop resolved/dead prompts, then overlay the survivors so the row goes
+        // red and carries the Allow/Deny bar, matching the toast the hook fired.
+        pruneApprovals(live: visible)
+        let overlaid = visible.map { s -> Session in
+            guard pendingApproval(for: s) != nil else { return s }
+            var s = s; s.state = .waitingPermission; return s
+        }
+
+        // Attention-first, then most-recently-active.
+        self.sessions = overlaid.sorted { a, b in
+            if a.needsAttention != b.needsAttention { return a.needsAttention }
+            return a.updatedAt > b.updatedAt
+        }
+    }
+
+    /// Drop prompts that aged out (no re-nudge since `approvalTTL`) or whose
+    /// session is no longer live, so the menu never shows a stale Allow/Deny.
+    private func pruneApprovals(live sessions: [Session]) {
+        guard !pendingApprovals.isEmpty else { return }
+        let now = Date()
+        pendingApprovals = pendingApprovals.filter { _, pa in
+            now.timeIntervalSince(pa.lastSeen) < approvalTTL
+                && sessions.contains { pa.matches($0, canonical: Self.canonical) }
+        }
     }
 }

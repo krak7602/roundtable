@@ -148,4 +148,55 @@ final class ClaudeCodeAdapter: HarnessAdapter, @unchecked Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return collapsed.count > 100 ? String(collapsed.prefix(100)) + "…" : collapsed
     }
+
+    /// The command/argument of the tool a session is currently blocked on, read
+    /// straight from its transcript. Claude's permission *hook* doesn't carry the
+    /// command, so we pull it here to show what you're approving. Off-main safe.
+    static func pendingCommand(sessionId: String) -> String? {
+        guard !sessionId.isEmpty else { return nil }
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/projects", isDirectory: true)
+        let fm = FileManager.default
+        guard let dirs = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return nil }
+        // The transcript is named <sessionId>.jsonl; find it without guessing the
+        // project-dir encoding.
+        var path: String?
+        for dir in dirs where dir.hasDirectoryPath {
+            let candidate = dir.appendingPathComponent("\(sessionId).jsonl")
+            if fm.fileExists(atPath: candidate.path) { path = candidate.path; break }
+        }
+        guard let p = path, let chunk = TailReader.lastChunk(of: p, maxBytes: 256 * 1024) else { return nil }
+        let entries = TailReader.jsonLines(from: chunk)
+        for entry in entries.reversed() {
+            if entry["isSidechain"] as? Bool == true { continue }
+            guard entry["type"] as? String == "assistant",
+                  let message = entry["message"] as? [String: Any],
+                  let content = message["content"] as? [[String: Any]] else { continue }
+            for block in content.reversed() where block["type"] as? String == "tool_use" {
+                return describe(toolUse: block)
+            }
+            break   // newest assistant turn had no tool call
+        }
+        return nil
+    }
+
+    /// A short, readable label for a tool_use block: the shell command, the file
+    /// being edited, or the tool name as a last resort.
+    private static func describe(toolUse block: [String: Any]) -> String {
+        let name = block["name"] as? String ?? "tool"
+        let input = block["input"] as? [String: Any] ?? [:]
+        let raw: String
+        if let cmd = input["command"] as? String, !cmd.isEmpty {
+            raw = cmd
+        } else if let fp = (input["file_path"] ?? input["path"]) as? String, !fp.isEmpty {
+            raw = "\(name) \((fp as NSString).lastPathComponent)"
+        } else if let url = input["url"] as? String, !url.isEmpty {
+            raw = "\(name) \(url)"
+        } else {
+            raw = name
+        }
+        let collapsed = raw.replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return collapsed.count > 160 ? String(collapsed.prefix(160)) + "…" : collapsed
+    }
 }

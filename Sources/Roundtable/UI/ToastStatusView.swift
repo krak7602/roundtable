@@ -24,7 +24,14 @@ final class ToastStatusView: NSView {
         }
     }
 
-    struct Toast { let text: String; let accent: Accent }
+    /// `focusCWD` is the jump target: set it and clicking the toast focuses that
+    /// session's seat. Left nil (test toasts) the click just opens the list.
+    struct Toast {
+        let text: String
+        let accent: Accent
+        var focusCWD: String? = nil
+        var focusName: String = ""
+    }
 
     private(set) var attentionCount = 0
     private var toast: Toast?

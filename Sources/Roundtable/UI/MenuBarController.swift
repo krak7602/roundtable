@@ -17,6 +17,7 @@ final class MenuBarController: NSObject {
     private var settingsWindow: NSWindow?
 
     private var queue: [ToastStatusView.Toast] = []
+    private var currentToast: ToastStatusView.Toast?
     private var showingToast = false
     private var hideTimer: Timer?
     private var gapTimer: Timer?
@@ -41,7 +42,13 @@ final class MenuBarController: NSObject {
             toastView.autoresizingMask = [.width, .height]
             button.addSubview(toastView)
         }
-        toastView.onClick = { [weak self] in self?.togglePopover() }
+        toastView.onClick = { [weak self] in self?.handleStatusClick() }
+
+        // Clicking a floating (over-full-screen) toast jumps to that session too.
+        toastPanel.onFocus = { [weak self] cwd, name in
+            FocusEngine.focus(cwd: cwd, name: name)
+            self?.dismissToast()
+        }
 
         popover.behavior = .transient
         popover.animates = true
@@ -73,6 +80,17 @@ final class MenuBarController: NSObject {
     }
 
     // MARK: - Popover
+
+    /// A click on the menu-bar item: while an attention toast is up, it's a call
+    /// to action, so jump to that session; otherwise just open the list.
+    private func handleStatusClick() {
+        if showingToast, let cwd = currentToast?.focusCWD, !cwd.isEmpty {
+            FocusEngine.focus(cwd: cwd, name: currentToast?.focusName ?? "")
+            dismissToast()
+        } else {
+            togglePopover()
+        }
+    }
 
     private func togglePopover() {
         guard let button = statusItem.button else { return }
@@ -121,6 +139,13 @@ final class MenuBarController: NSObject {
         let message = obj["message"] as? String ?? ""
         let sessionId = obj["session_id"] as? String ?? ""
         let toolName = obj["tool_name"] as? String ?? ""
+        // The actual command/argument, when the hook carries it (shape varies by
+        // harness). Used as the prompt preview so you see what you're approving.
+        let toolInput = obj["tool_input"] as? [String: Any]
+        let command = (obj["command"] as? String)
+            ?? (toolInput?["command"] as? String)
+            ?? (toolInput?["file_path"] as? String)
+            ?? ((obj["input"] as? [String: Any])?["command"] as? String)
         // Stable id for the specific prompt, so a re-notified pending prompt
         // (Claude re-fires every ~30-60s) doesn't re-toast on every nudge.
         let dedupeId = (obj["prompt_id"] as? String)
@@ -128,7 +153,8 @@ final class MenuBarController: NSObject {
             ?? (obj["turn_id"] as? String) ?? ""
         Task { @MainActor in
             self.handleHookEvent(event: event, cwd: cwd, message: message,
-                                 sessionId: sessionId, toolName: toolName, dedupeId: dedupeId)
+                                 sessionId: sessionId, toolName: toolName,
+                                 command: command, dedupeId: dedupeId)
         }
     }
 
@@ -137,22 +163,25 @@ final class MenuBarController: NSObject {
     /// Claude Code sends a `Notification` whose message mentions permission. Codex
     /// sends `PermissionRequest`, which fires only when an approval is needed.
     private func handleHookEvent(event: String, cwd: String, message: String,
-                                 sessionId: String, toolName: String, dedupeId: String) {
-        let name = store.sessions.first { $0.id == sessionId || $0.cwd == cwd }?.name
-            ?? (cwd.isEmpty ? "session" : (cwd as NSString).lastPathComponent)
+                                 sessionId: String, toolName: String, command: String?,
+                                 dedupeId: String) {
+        let session = store.sessions.first { $0.id == sessionId || $0.cwd == cwd }
+        let name = session?.name ?? (cwd.isEmpty ? "session" : (cwd as NSString).lastPathComponent)
+        let harness = session?.harness ?? .claudeCode   // Notification is Claude; PermissionRequest usually resolves via cwd
         let key = dedupeId.isEmpty ? "\(sessionId)|\(toolName)|\(message)" : dedupeId
 
-        switch event {
-        case "Notification" where message.range(of: "permission", options: .caseInsensitive) != nil:
-            guard !suppressRepeat(key) else { return }
-            enqueueRaw(text: "\(name) — needs permission", accent: .red)
-        case "PermissionRequest":
-            guard !suppressRepeat(key) else { return }
-            let tool = toolName.isEmpty ? "a command" : toolName
-            enqueueRaw(text: "\(name) — approve \(tool)?", accent: .red)
-        default:
-            break
-        }
+        let isPermission = (event == "Notification" && message.range(of: "permission", options: .caseInsensitive) != nil)
+            || event == "PermissionRequest"
+        guard isPermission else { return }
+
+        // Record the actionable prompt (drives the Allow/Deny/Jump row) even when
+        // the toast is suppressed as a repeat, so the buttons persist in the menu.
+        store.recordApproval(id: key, sessionId: sessionId, cwd: cwd, harness: harness, tool: toolName, command: command)
+
+        guard !suppressRepeat(key) else { return }
+        let tool = toolName.isEmpty ? "a command" : toolName
+        let text = event == "PermissionRequest" ? "\(name) — approve \(tool)?" : "\(name) — needs permission"
+        enqueueRaw(text: text, accent: .red, cwd: cwd, name: name)
     }
 
     /// Toast a given prompt once, then allow a re-nudge only after the window has
@@ -168,9 +197,10 @@ final class MenuBarController: NSObject {
         return false
     }
 
-    private func enqueueRaw(text: String, accent: ToastStatusView.Accent) {
+    private func enqueueRaw(text: String, accent: ToastStatusView.Accent, cwd: String = "", name: String = "") {
         if queue.contains(where: { $0.text == text }) { return }
-        queue.append(.init(text: text, accent: accent))
+        queue.append(.init(text: text, accent: accent,
+                           focusCWD: cwd.isEmpty ? nil : cwd, focusName: name))
         if !showingToast { showNext() }
     }
 
@@ -178,7 +208,9 @@ final class MenuBarController: NSObject {
 
     private func enqueue(_ session: Session) {
         let accent: ToastStatusView.Accent = (session.state == .waitingPermission || session.state == .error) ? .red : .amber
-        let toast = ToastStatusView.Toast(text: "\(session.name) — \(session.state.label)", accent: accent)
+        let toast = ToastStatusView.Toast(
+            text: "\(session.name) — \(session.state.label)", accent: accent,
+            focusCWD: session.cwd, focusName: session.name)
         if queue.contains(where: { $0.text == toast.text }) { return }   // coalesce dupes
         queue.append(toast)
         if !showingToast { showNext() }
@@ -188,6 +220,7 @@ final class MenuBarController: NSObject {
         guard !popover.isShown, !queue.isEmpty else { return }
         let toast = queue.removeFirst()
         showingToast = true
+        currentToast = toast
 
         routeToast(toast)
         playSound(toast.accent)
@@ -207,12 +240,14 @@ final class MenuBarController: NSObject {
         let accent: ToastAccent = toast.accent == .red ? .red : .amber
 
         if AppSettings.shared.fireOnAllScreens {
-            toastPanel.show(text: toast.text, accent: accent, on: NSScreen.screens)
+            toastPanel.show(text: toast.text, accent: accent,
+                            focusCWD: toast.focusCWD, focusName: toast.focusName, on: NSScreen.screens)
             return
         }
         let screen = NSScreen.focused
         if debugForcePanel || FullScreenDetector.isFullScreen(screen) {
-            toastPanel.show(text: toast.text, accent: accent, on: [screen])
+            toastPanel.show(text: toast.text, accent: accent,
+                            focusCWD: toast.focusCWD, focusName: toast.focusName, on: [screen])
         } else {
             toastView.setToast(toast)
             animateLength(to: toastView.toastWidth(for: toast.text))
@@ -225,6 +260,7 @@ final class MenuBarController: NSObject {
             toastPanel.close()
             collapseItemToast()
             showingToast = false
+            currentToast = nil
             debugForcePanel = false   // don't let a --test-toast-fs latch real toasts to the panel
         } else {
             // Retract the current one, then let the next enter once it's fully
@@ -244,6 +280,7 @@ final class MenuBarController: NSObject {
         toastPanel.close()
         collapseItemToast()
         showingToast = false
+        currentToast = nil
     }
 
     private func collapseItemToast() {

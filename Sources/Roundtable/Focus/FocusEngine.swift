@@ -9,11 +9,19 @@ import AppKit
 /// layer on when the terminal supports them.
 enum FocusEngine {
 
+    /// Focus the seat for a session.
+    static func focus(_ session: Session) {
+        focus(cwd: session.cwd, name: session.name)
+    }
+
+    /// Focus by working directory. This is the join key, so a caller that only
+    /// has the cwd (a toast fired straight from a hook, before the session is in
+    /// the store) can still land the jump.
+    ///
     /// Runs the process correlation + shell focus off the main thread (they can
     /// block if a terminal hangs), then hops back to main to raise the app.
-    static func focus(_ session: Session) {
-        let cwd = session.cwd
-        let name = session.name
+    static func focus(cwd: String, name: String) {
+        guard !cwd.isEmpty else { return }
         DispatchQueue.global(qos: .userInitiated).async {
             guard let loc = ProcessCorrelator.locate(cwd: cwd) else {
                 NSLog("[Roundtable] focus: no live process for \(name) @ \(cwd)")
@@ -35,21 +43,66 @@ enum FocusEngine {
         let env = loc.paneEnv
         let terminal = (loc.terminalApp ?? "").lowercased()
 
-        // muxy: `muxy <path>` focuses the project workspace for that directory.
+        // muxy: `muxy <path>` focuses the workspace for that directory. That is
+        // the finest target muxy's CLI exposes, and since each worktree has its
+        // own cwd, it already lands on the right pane.
         if terminal.contains("muxy") || env["MUXY_PROJECT_ID"] != nil {
             _ = run(muxyPath(), [cwd])
             return
         }
 
-        // tmux: select the inner pane; the app-activate above raises the host GUI.
+        // tmux: select the inner pane and its window; the app-activate above
+        // raises the host GUI.
         if let pane = env["TMUX_PANE"] {
             _ = run("/usr/bin/env", ["tmux", "select-pane", "-t", pane])
             _ = run("/usr/bin/env", ["tmux", "select-window", "-t", pane])
             return
         }
 
-        // iTerm2: exact-session activation via its API/AppleScript is a later
-        // pass. App-level activate covers the floor until then.
+        // iTerm2: select the exact session by its guid (the part of
+        // ITERM_SESSION_ID after the colon), so we land in the right split
+        // rather than just raising the app. The env var comes from another
+        // process and is interpolated into AppleScript, so the guid must match
+        // the known UUID shape (hex + dashes) before we trust it, or a crafted
+        // value could inject script.
+        if let sid = env["ITERM_SESSION_ID"], !sid.isEmpty {
+            let guid = sid.split(separator: ":").last.map(String.init) ?? sid
+            if !guid.isEmpty, guid.allSatisfy({ $0.isHexDigit || $0 == "-" }) {
+                selectITerm(guid: guid)
+            }
+            return
+        }
+
+        // kitty: best effort. Needs `allow_remote_control` enabled; fails quietly
+        // (into run's error path) when it isn't. The window id is a plain integer;
+        // reject anything else rather than pass it to the match expression.
+        if let winID = env["KITTY_WINDOW_ID"], !winID.isEmpty,
+           winID.allSatisfy(\.isNumber) {
+            _ = run("/usr/bin/env", ["kitten", "@", "focus-window", "--match", "id:\(winID)"])
+            return
+        }
+    }
+
+    /// Walk iTerm2's window/tab/session tree and select the split whose id
+    /// matches, via AppleScript (its scripting bridge has no direct lookup).
+    private static func selectITerm(guid: String) {
+        let script = """
+        tell application "iTerm2"
+          repeat with w in windows
+            repeat with t in tabs of w
+              repeat with s in sessions of t
+                if id of s is "\(guid)" then
+                  select w
+                  tell t to select
+                  tell s to select
+                  return
+                end if
+              end repeat
+            end repeat
+          end repeat
+        end tell
+        """
+        _ = run("/usr/bin/osascript", ["-e", script])
     }
 
     /// Prefer the CLI on PATH; fall back to the well-known install location.

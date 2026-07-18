@@ -115,10 +115,10 @@ enum ProcessCorrelator {
     }
 
     private static func isPaneKey(_ key: String) -> Bool {
-        // Real per-pane identifiers as observed on-machine. muxy exposes
-        // project/worktree/socket rather than a pane id; cmux TBD when tested.
+        // Real per-pane identifiers as observed on-machine. muxy DOES inject a
+        // MUXY_PANE_ID (the send-keys target); it also exposes project/worktree.
         ["ITERM_SESSION_ID", "TMUX_PANE", "TMUX",
-         "MUXY_PROJECT_ID", "MUXY_WORKTREE_ID", "MUXY_SOCKET_PATH",
+         "MUXY_PANE_ID", "MUXY_PROJECT_ID", "MUXY_WORKTREE_ID", "MUXY_SOCKET_PATH",
          "CMUX_PANE_ID", "KITTY_WINDOW_ID"].contains(key)
     }
 
