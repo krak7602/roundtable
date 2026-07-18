@@ -1,0 +1,112 @@
+import Foundation
+import SwiftUI
+
+/// The spine. Owns the adapters, polls them on a background queue, publishes the
+/// normalized session list to the UI, and detects state transitions worth a
+/// notification. Everything the menu bar renders flows through here.
+@MainActor
+final class SessionStore: ObservableObject {
+    static let shared = SessionStore()
+
+    @Published private(set) var sessions: [Session] = []
+
+    private let adapters: [any HarnessAdapter]
+    private var timer: Timer?
+    private let scanQueue = DispatchQueue(label: "roundtable.scan", qos: .utility)
+
+    /// Called on the *edge* into an attention state (not every poll). The
+    /// menu-bar controller uses this to enqueue a transient in-place toast,
+    /// which is deliberately not a focus-stealing macOS notification.
+    var onAttentionEdge: ((Session) -> Void)?
+
+    /// Remember the last state we saw per session, so we only fire on the edge.
+    private var lastState: [String: SessionState] = [:]
+
+    init(adapters: [any HarnessAdapter] = [
+            ClaudeCodeAdapter(),
+            CodexAdapter(),
+            PiAdapter(harness: .pi, homeDir: ".pi"),
+            PiAdapter(harness: .ohMyPi, homeDir: ".omp"),
+         ]) {
+        self.adapters = adapters
+    }
+
+    var attentionCount: Int {
+        sessions.filter(\.needsAttention).count
+    }
+
+    func start(interval: TimeInterval = 2.0) {
+        refresh()
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.refresh() }
+        }
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+    }
+
+    /// Guards against overlapping scans: if one is still running when the timer
+    /// fires (a slow lsof can exceed the 2s interval), skip rather than pile up.
+    private var scanning = false
+
+    private func refresh() {
+        guard !scanning else { return }
+        scanning = true
+        let adapters = self.adapters
+        scanQueue.async { [weak self] in
+            let scanned = adapters.flatMap { $0.scan() }
+            let live = ProcessCorrelator.liveHarnessCWDs()
+            let filtered = Self.keepLive(scanned, liveCWDs: live)
+            Task { @MainActor in
+                self?.scanning = false
+                self?.apply(filtered)
+            }
+        }
+    }
+
+    /// The DISK+PROC join: keep only sessions whose cwd has a live harness
+    /// process, then collapse to the most-recently-active transcript per cwd.
+    /// Paths are canonicalized (symlinks/firmlinks resolved) because `lsof`
+    /// reports resolved paths while a harness may record the symlinked one. A
+    /// mismatch would silently drop a live session from the UI.
+    nonisolated private static func keepLive(_ sessions: [Session], liveCWDs: Set<String>) -> [Session] {
+        let live = Set(liveCWDs.map(canonical))
+        var newest: [String: Session] = [:]
+        for s in sessions where live.contains(canonical(s.cwd)) {
+            // Per (harness, cwd): a Claude and an omp session live in the same
+            // directory stay distinct; stale transcripts of one harness collapse.
+            let key = "\(s.harness.rawValue)\u{1}\(canonical(s.cwd))"
+            if let existing = newest[key], existing.updatedAt >= s.updatedAt { continue }
+            newest[key] = s
+        }
+        return Array(newest.values)
+    }
+
+    nonisolated private static func canonical(_ path: String) -> String {
+        path.isEmpty ? path : URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+    }
+
+    private func apply(_ scanned: [Session]) {
+        // Respect per-harness visibility from settings.
+        let visible = scanned.filter { AppSettings.shared.isEnabled($0.harness) }
+        // Attention-first, then most-recently-active.
+        let sorted = visible.sorted { a, b in
+            if a.needsAttention != b.needsAttention { return a.needsAttention }
+            return a.updatedAt > b.updatedAt
+        }
+
+        var next: [String: SessionState] = [:]
+        for s in sorted {
+            let previous = lastState[s.id]
+            if previous != s.state, s.state.needsAttention, previous != nil {
+                onAttentionEdge?(s)
+            }
+            next[s.id] = s.state
+        }
+        lastState = next   // prune ids that are no longer live
+
+        self.sessions = sorted
+    }
+}
