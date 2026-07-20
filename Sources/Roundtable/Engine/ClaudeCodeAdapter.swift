@@ -153,19 +153,8 @@ final class ClaudeCodeAdapter: HarnessAdapter, @unchecked Sendable {
     /// straight from its transcript. Claude's permission *hook* doesn't carry the
     /// command, so we pull it here to show what you're approving. Off-main safe.
     static func pendingCommand(sessionId: String) -> String? {
-        guard !sessionId.isEmpty else { return nil }
-        let root = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/projects", isDirectory: true)
-        let fm = FileManager.default
-        guard let dirs = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return nil }
-        // The transcript is named <sessionId>.jsonl; find it without guessing the
-        // project-dir encoding.
-        var path: String?
-        for dir in dirs where dir.hasDirectoryPath {
-            let candidate = dir.appendingPathComponent("\(sessionId).jsonl")
-            if fm.fileExists(atPath: candidate.path) { path = candidate.path; break }
-        }
-        guard let p = path, let chunk = TailReader.lastChunk(of: p, maxBytes: 256 * 1024) else { return nil }
+        guard let p = transcriptPath(sessionId: sessionId),
+              let chunk = TailReader.lastChunk(of: p, maxBytes: 256 * 1024) else { return nil }
         let entries = TailReader.jsonLines(from: chunk)
         for entry in entries.reversed() {
             if entry["isSidechain"] as? Bool == true { continue }
@@ -178,6 +167,56 @@ final class ClaudeCodeAdapter: HarnessAdapter, @unchecked Sendable {
             break   // newest assistant turn had no tool call
         }
         return nil
+    }
+
+    /// Recent conversation + tool activity for the peek, straight from the
+    /// transcript, so it reads as clean content with none of the terminal's UI
+    /// chrome (input box, status bar). Off-main safe.
+    static func recentActivity(sessionId: String, limit: Int = 16) -> [String] {
+        guard let p = transcriptPath(sessionId: sessionId),
+              let chunk = TailReader.lastChunk(of: p, maxBytes: 256 * 1024) else { return [] }
+        let entries = TailReader.jsonLines(from: chunk)
+        var items: [String] = []
+        for entry in entries {
+            if entry["isSidechain"] as? Bool == true { continue }
+            guard let type = entry["type"] as? String,
+                  let message = entry["message"] as? [String: Any] else { continue }
+            if type == "user", let text = message["content"] as? String {
+                let f = flatten(text)
+                if !f.isEmpty { items.append("❯ \(f)") }   // a human prompt
+            } else if type == "assistant", let content = message["content"] as? [[String: Any]] {
+                for block in content {
+                    switch block["type"] as? String {
+                    case "text":
+                        if let t = block["text"] as? String { let f = flatten(t); if !f.isEmpty { items.append(f) } }
+                    case "tool_use":
+                        items.append("→ \(describe(toolUse: block))")
+                    default: break
+                    }
+                }
+            }
+        }
+        return Array(items.suffix(limit))
+    }
+
+    /// The transcript file for a session id, found without guessing the
+    /// project-dir encoding (the file is named <sessionId>.jsonl).
+    private static func transcriptPath(sessionId: String) -> String? {
+        guard !sessionId.isEmpty else { return nil }
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/projects", isDirectory: true)
+        let fm = FileManager.default
+        guard let dirs = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return nil }
+        for dir in dirs where dir.hasDirectoryPath {
+            let candidate = dir.appendingPathComponent("\(sessionId).jsonl")
+            if fm.fileExists(atPath: candidate.path) { return candidate.path }
+        }
+        return nil
+    }
+
+    private static func flatten(_ s: String) -> String {
+        let c = s.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        return c.count > 200 ? String(c.prefix(200)) + "…" : c
     }
 
     /// A short, readable label for a tool_use block: the shell command, the file

@@ -14,6 +14,11 @@ struct PendingApproval: Identifiable, Sendable {
     let createdAt: Date       // first seen (for display)
     var lastSeen: Date        // refreshed on each re-nudge; expiry measures from here
 
+    /// Wall-clock moment we finished processing this prompt (after the pending
+    /// tool call is on disk). Any transcript write newer than this means the
+    /// prompt was answered elsewhere, so we can drop it. nil until resolved.
+    var baseline: Date?
+
     /// Whether we can type the answer into this session's terminal. False means
     /// the UI shows the command + Jump only (no Allow/Deny buttons).
     var canAnswer: Bool = false

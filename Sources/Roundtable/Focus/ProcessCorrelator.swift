@@ -36,6 +36,13 @@ enum ProcessCorrelator {
         "iTerm2", "Terminal", "ghostty", "muxy", "cmux", "tmux", "WezTerm", "kitty", "Alacritty"
     ]
 
+    /// Whether the session's terminal posts its own notifications for agent
+    /// events (so ours would be a duplicate). muxy does, via its bundled hook.
+    static func terminalSelfNotifies(cwd: String) -> Bool {
+        guard let loc = locate(cwd: cwd) else { return false }
+        return (loc.terminalApp ?? "").lowercased().contains("muxy") || loc.paneEnv["MUXY_PANE_ID"] != nil
+    }
+
     /// Find the harness process running in `cwd` and resolve its terminal.
     static func locate(cwd: String) -> ProcessLocation? {
         guard !cwd.isEmpty else { return nil }

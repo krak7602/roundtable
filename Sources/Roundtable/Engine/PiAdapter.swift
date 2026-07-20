@@ -147,4 +147,78 @@ final class PiAdapter: HarnessAdapter, @unchecked Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return collapsed.count > 100 ? String(collapsed.prefix(100)) + "…" : collapsed
     }
+
+    // MARK: - Peek / approval detail (off-main safe; `homeDir` picks .pi vs .omp)
+
+    /// The command a session is blocked on: the newest `toolCall` block in the
+    /// last assistant message.
+    static func pendingCommand(sessionId: String, homeDir: String) -> String? {
+        guard let p = transcriptPath(sessionId: sessionId, homeDir: homeDir),
+              let chunk = TailReader.lastChunk(of: p) else { return nil }
+        for entry in TailReader.jsonLines(from: chunk).reversed() {
+            guard entry["type"] as? String == "message",
+                  let message = entry["message"] as? [String: Any],
+                  message["role"] as? String == "assistant",
+                  let content = message["content"] as? [[String: Any]] else { continue }
+            for block in content.reversed() where block["type"] as? String == "toolCall" {
+                return describeCall(block)
+            }
+            break
+        }
+        return nil
+    }
+
+    static func recentActivity(sessionId: String, homeDir: String, limit: Int = 16) -> [String] {
+        guard let p = transcriptPath(sessionId: sessionId, homeDir: homeDir),
+              let chunk = TailReader.lastChunk(of: p) else { return [] }
+        var items: [String] = []
+        for entry in TailReader.jsonLines(from: chunk) {
+            guard entry["type"] as? String == "message",
+                  let message = entry["message"] as? [String: Any] else { continue }
+            let role = message["role"] as? String
+            if let s = message["content"] as? String {   // plain user text
+                let f = flatten(s); if !f.isEmpty { items.append(role == "user" ? "❯ \(f)" : f) }
+                continue
+            }
+            guard let content = message["content"] as? [[String: Any]] else { continue }
+            for block in content {
+                switch block["type"] as? String {
+                case "text":
+                    if let t = block["text"] as? String { let f = flatten(t); if !f.isEmpty { items.append(role == "user" ? "❯ \(f)" : f) } }
+                case "toolCall":
+                    items.append("→ \(describeCall(block))")
+                default:
+                    break
+                }
+            }
+        }
+        return Array(items.suffix(limit))
+    }
+
+    private static func transcriptPath(sessionId: String, homeDir: String) -> String? {
+        guard !sessionId.isEmpty else { return nil }
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("\(homeDir)/agent/sessions")
+        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { return nil }
+        // The primary session file is named <ts>_<id>.jsonl; match on the id.
+        for case let url as URL in walker where url.pathExtension == "jsonl" && url.lastPathComponent.contains(sessionId) {
+            return url.path
+        }
+        return nil
+    }
+
+    private static func describeCall(_ block: [String: Any]) -> String {
+        let name = block["name"] as? String ?? "tool"
+        let args = block["arguments"] as? [String: Any] ?? [:]
+        if let cmd = (args["command"] ?? args["cmd"]) as? String, !cmd.isEmpty { return flatten(cmd) }
+        if let fp = (args["file_path"] ?? args["path"]) as? String, !fp.isEmpty {
+            return "\(name) \((fp as NSString).lastPathComponent)"
+        }
+        return name
+    }
+
+    private static func flatten(_ s: String) -> String {
+        let c = s.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        return c.count > 180 ? String(c.prefix(180)) + "…" : c
+    }
 }

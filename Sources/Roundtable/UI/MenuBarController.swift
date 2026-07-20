@@ -181,7 +181,23 @@ final class MenuBarController: NSObject {
         guard !suppressRepeat(key) else { return }
         let tool = toolName.isEmpty ? "a command" : toolName
         let text = event == "PermissionRequest" ? "\(name) — approve \(tool)?" : "\(name) — needs permission"
-        enqueueRaw(text: text, accent: .red, cwd: cwd, name: name)
+        firePermissionToast(text: text, cwd: cwd, name: name)
+    }
+
+    /// Fire the permission toast, unless the user asked us to defer to a terminal
+    /// that notifies on its own (muxy) — checked off-main since it locates the pane.
+    private func firePermissionToast(text: String, cwd: String, name: String) {
+        guard AppSettings.shared.deferTerminalNotifications, !cwd.isEmpty else {
+            enqueueRaw(text: text, accent: .red, cwd: cwd, name: name)
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let selfNotifies = ProcessCorrelator.terminalSelfNotifies(cwd: cwd)
+            Task { @MainActor in
+                guard let self, !selfNotifies else { return }
+                self.enqueueRaw(text: text, accent: .red, cwd: cwd, name: name)
+            }
+        }
     }
 
     /// Toast a given prompt once, then allow a re-nudge only after the window has

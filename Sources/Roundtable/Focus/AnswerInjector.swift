@@ -37,16 +37,19 @@ enum AnswerInjector {
 
     // MARK: - Per-harness keystrokes
 
-    /// What to press for each harness's prompt. Claude's menu has "Yes" as
-    /// option 1 and Esc cancels, both position-stable. Codex/omp values are
-    /// first-pass defaults to confirm against a live prompt.
+    /// What to press for each harness's prompt.
+    /// - Claude: menu with "Yes" as option 1, Esc cancels — both confirmed live.
+    /// - Codex / Pi / Oh My Pi: `y`/`n` then Enter. These are best-effort until
+    ///   confirmed against a live prompt in each; adjust here if a harness selects
+    ///   differently (e.g. a number menu or a bare keypress).
     private static func keystrokes(harness: Harness, decision: ApprovalDecision) -> [KeyOp] {
         switch (harness, decision) {
         case (.claudeCode, .allow): return [.text("1"), .key("enter")]
         case (.claudeCode, .deny):  return [.key("escape")]
-        default:
-            return decision == .allow ? [.text("y"), .key("enter")]
-                                      : [.text("n"), .key("enter")]
+        case (.codex, .allow), (.pi, .allow), (.ohMyPi, .allow):
+            return [.text("y"), .key("enter")]
+        case (.codex, .deny), (.pi, .deny), (.ohMyPi, .deny):
+            return [.text("n"), .key("enter")]
         }
     }
 
@@ -85,11 +88,10 @@ enum AnswerInjector {
     // muxy: one command per line over its command socket. `send|pane|text` types
     // literal text, `send-keys|pane|name` presses a named key.
     private static func deliverMuxy(_ ops: [KeyOp], pane: String) {
-        let socket = muxyCommandSocket()
         for op in ops {
             switch op {
-            case .text(let t): unixSocketSend("send|\(pane)|\(t)", path: socket)
-            case .key(let k):  unixSocketSend("send-keys|\(pane)|\(k)", path: socket)
+            case .text(let t): MuxyControl.send("send|\(pane)|\(t)")
+            case .key(let k):  MuxyControl.send("send-keys|\(pane)|\(k)")
             }
         }
     }
@@ -142,40 +144,6 @@ enum AnswerInjector {
     }
 
     // MARK: - Transport helpers
-
-    /// muxy's command socket (distinct from MUXY_SOCKET_PATH, which is the
-    /// notification socket). Derived from HOME so the "Application Support" space
-    /// never trips the env-var parser.
-    private static func muxyCommandSocket() -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/Library/Application Support/Muxy/muxy.sock"
-    }
-
-    /// Send one newline-terminated message to a Unix domain socket and close.
-    private static func unixSocketSend(_ message: String, path: String) {
-        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { return }
-        defer { close(fd) }
-
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let pathBytes = path.utf8CString
-        let cap = MemoryLayout.size(ofValue: addr.sun_path)
-        guard pathBytes.count <= cap else { return }
-        withUnsafeMutablePointer(to: &addr.sun_path) { raw in
-            raw.withMemoryRebound(to: CChar.self, capacity: cap) { dst in
-                pathBytes.withUnsafeBufferPointer { src in
-                    dst.update(from: src.baseAddress!, count: pathBytes.count)
-                }
-            }
-        }
-        let len = socklen_t(MemoryLayout<sockaddr_un>.size)
-        let connected = withUnsafePointer(to: &addr) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, len) }
-        }
-        guard connected == 0 else { return }
-        Array((message + "\n").utf8).withUnsafeBytes { _ = send(fd, $0.baseAddress, $0.count, 0) }
-    }
 
     @discardableResult
     private static func run(_ launch: String, _ args: [String]) -> String {

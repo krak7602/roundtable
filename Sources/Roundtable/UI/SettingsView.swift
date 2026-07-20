@@ -23,6 +23,10 @@ struct SettingsView: View {
                 Toggle("Show toasts on all screens", isOn: $settings.fireOnAllScreens)
                 Text("Off: shows on the screen you're focused on — a floating pill over full-screen apps, or the menu-bar item otherwise. On: a pill on every screen, each placed for that screen's state.")
                     .font(.caption).foregroundStyle(.secondary)
+
+                Toggle("Don't duplicate the terminal's own notifications", isOn: $settings.deferTerminalNotifications)
+                Text("On: skip our permission toast for a session whose terminal already notifies you (muxy), so you aren't alerted twice. The menu row and its Allow/Deny still appear.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section("Show harnesses") {

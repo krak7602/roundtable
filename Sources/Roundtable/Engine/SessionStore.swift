@@ -64,7 +64,7 @@ final class SessionStore: ObservableObject {
             createdAt: existing?.createdAt ?? now, lastSeen: now,
             canAnswer: existing?.canAnswer ?? false)
 
-        let needsCommand = (command?.isEmpty ?? true) && harness == .claudeCode
+        let needsCommand = command?.isEmpty ?? true
         // Off a throwaway queue, not the poll queue: the retry below can sleep up
         // to a second and must not stall scanning.
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -74,16 +74,20 @@ final class SessionStore: ObservableObject {
             var enriched: String?
             if needsCommand {
                 for _ in 0..<6 {
-                    if let c = ClaudeCodeAdapter.pendingCommand(sessionId: sessionId), !c.isEmpty {
+                    if let c = HarnessDetail.pendingCommand(harness: harness, sessionId: sessionId), !c.isEmpty {
                         enriched = c; break
                     }
                     Thread.sleep(forTimeInterval: 0.2)
                 }
             }
+            // Baseline the resolution clock now: the pending tool call is on disk,
+            // so any later transcript write means the prompt was answered.
+            let baseline = Date()
             Task { @MainActor in
                 guard var pa = self?.pendingApprovals[key] else { return }
                 pa.canAnswer = can
                 if pa.command?.isEmpty ?? true, let enriched { pa.command = enriched }
+                pa.baseline = baseline
                 self?.pendingApprovals[key] = pa
             }
         }
@@ -177,14 +181,18 @@ final class SessionStore: ObservableObject {
         }
     }
 
-    /// Drop prompts that aged out (no re-nudge since `approvalTTL`) or whose
-    /// session is no longer live, so the menu never shows a stale Allow/Deny.
+    /// Drop prompts that were answered (the session's transcript advanced past
+    /// the baseline we set when we recorded it), aged out, or whose session is no
+    /// longer live, so the menu never shows a stale Allow/Deny.
     private func pruneApprovals(live sessions: [Session]) {
         guard !pendingApprovals.isEmpty else { return }
         let now = Date()
         pendingApprovals = pendingApprovals.filter { _, pa in
-            now.timeIntervalSince(pa.lastSeen) < approvalTTL
-                && sessions.contains { pa.matches($0, canonical: Self.canonical) }
+            guard let session = sessions.first(where: { pa.matches($0, canonical: Self.canonical) }) else { return false }
+            // Answered elsewhere: a transcript write newer than our baseline. Small
+            // margin so the tool-call write that created the prompt doesn't count.
+            if let baseline = pa.baseline, session.updatedAt.timeIntervalSince(baseline) > 1.0 { return false }
+            return now.timeIntervalSince(pa.lastSeen) < approvalTTL
         }
     }
 }

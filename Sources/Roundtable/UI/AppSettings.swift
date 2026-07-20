@@ -19,12 +19,18 @@ final class AppSettings: ObservableObject {
     /// Off: toast on the focused screen only. On: on every screen.
     @Published var fireOnAllScreens: Bool { didSet { d.set(fireOnAllScreens, forKey: "fireOnAllScreens") } }
 
+    /// On: don't fire our own permission toast for a session whose terminal
+    /// already notifies you (muxy), so you aren't double-notified. The menu row
+    /// and its Allow/Deny still appear; only our toast is suppressed.
+    @Published var deferTerminalNotifications: Bool { didSet { d.set(deferTerminalNotifications, forKey: "deferTerminalNotifications") } }
+
     private init() {
         soundEnabled = d.object(forKey: "soundEnabled") as? Bool ?? true
         waitingSound = d.string(forKey: "waitingSound") ?? "Glass"
         permissionSound = d.string(forKey: "permissionSound") ?? "Submarine"
         hiddenHarnesses = Set(d.stringArray(forKey: "hiddenHarnesses") ?? [])
         fireOnAllScreens = d.bool(forKey: "fireOnAllScreens")
+        deferTerminalNotifications = d.bool(forKey: "deferTerminalNotifications")
     }
 
     func isEnabled(_ harness: Harness) -> Bool { !hiddenHarnesses.contains(harness.shortName) }

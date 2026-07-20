@@ -6,6 +6,14 @@ struct MenuContent: View {
     @ObservedObject var store: SessionStore
     var onSettings: () -> Void = {}
 
+    /// The row expanded into a full-height peek (takes over the menu). Only one
+    /// at a time, so the peek gets the whole panel.
+    @State private var expandedID: String?
+
+    private func toggle(_ id: String) {
+        expandedID = (expandedID == id) ? nil : id
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
@@ -15,10 +23,26 @@ struct MenuContent: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
+            } else if let id = expandedID, let session = store.sessions.first(where: { $0.id == id }) {
+                // Peek takeover: just this session, given the whole panel.
+                SessionRow(session: session, isExpanded: true, onToggle: { expandedID = nil })
+                    .contentShape(Rectangle())
+                    .onTapGesture { FocusEngine.focus(session) }
+                if let pa = store.pendingApproval(for: session) {
+                    ApprovalBar(
+                        approval: pa,
+                        onAllow: { answer(pa, .allow) },
+                        onDeny:  { answer(pa, .deny) },
+                        onJump:  { FocusEngine.focus(session) })
+                }
+                Divider().opacity(0.4)
+                PeekView(session: session, onJump: { FocusEngine.focus(session) })
             } else {
                 ForEach(store.sessions) { session in
                     VStack(alignment: .leading, spacing: 0) {
-                        SessionRow(session: session)
+                        SessionRow(session: session,
+                                   isExpanded: false,
+                                   onToggle: { toggle(session.id) })
                             .contentShape(Rectangle())
                             .onTapGesture { FocusEngine.focus(session) }
                         if let pa = store.pendingApproval(for: session) {
@@ -116,6 +140,8 @@ struct ApprovalBar: View {
 
 struct SessionRow: View {
     let session: Session
+    var isExpanded: Bool = false
+    var onToggle: () -> Void = {}
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -139,8 +165,102 @@ struct SessionRow: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
+            // Peek toggle. Its own button so tapping it expands rather than
+            // jumping (the rest of the row still jumps).
+            Button(action: onToggle) {
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                    .frame(width: 16, height: 16)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
     }
+}
+
+/// Full-height peek: the session's recent activity (Claude transcript, else the
+/// live screen), shown plainly so you can triage without switching. Sizes to its
+/// content up to a cap, and pins to the newest line at the bottom.
+struct PeekView: View {
+    let session: Session
+    var onJump: () -> Void
+    @State private var items: [String]?
+    @State private var measured: CGFloat = 0
+    private let maxHeight: CGFloat = 320
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let items {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
+                                Text(item)
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.primary.opacity(0.85))
+                                    .lineSpacing(2)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 5)
+                                if idx < items.count - 1 { Divider().opacity(0.18) }
+                            }
+                            Color.clear.frame(height: 0).id("peekEnd")
+                        }
+                        .background(GeometryReader { g in
+                            Color.clear.preference(key: PeekHeightKey.self, value: g.size.height)
+                        })
+                    }
+                    .frame(height: min(max(measured, 40), maxHeight))
+                    // Once the async height measurement settles (or the items
+                    // change), pin the bottom into view. defaultScrollAnchor
+                    // alone doesn't survive the 0→full height jump.
+                    .onPreferenceChange(PeekHeightKey.self) { h in
+                        measured = h
+                        DispatchQueue.main.async { proxy.scrollTo("peekEnd", anchor: .bottom) }
+                    }
+                    .onChange(of: items) { _, _ in
+                        DispatchQueue.main.async { proxy.scrollTo("peekEnd", anchor: .bottom) }
+                    }
+                }
+            } else {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Reading…").font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+            }
+
+            HStack {
+                Button(action: refresh) {
+                    Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(.borderless).foregroundStyle(.secondary)
+                Spacer()
+                Button("Jump", action: onJump).buttonStyle(.borderedProminent).controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 10).padding(.bottom, 12)
+        .task(id: session.id) { refresh() }
+    }
+
+    private func refresh() {
+        let s = session
+        Task {
+            items = await withCheckedContinuation { cont in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    cont.resume(returning: SessionPeek.content(for: s))
+                }
+            }
+        }
+    }
+}
+
+private struct PeekHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat { 0 }
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
