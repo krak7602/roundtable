@@ -21,6 +21,11 @@ final class MenuBarController: NSObject {
     private var showingToast = false
     private var hideTimer: Timer?
     private var gapTimer: Timer?
+    private var hoverOpenTimer: Timer?
+    private var hoverCloseTimer: Timer?
+    /// Only a hover-opened menu closes itself on hover-out; a clicked one stays
+    /// until you dismiss it, as before.
+    private var openedByHover = false
     private var lengthTimer: Timer?
     private var lengthAnimStep = 0
 
@@ -43,6 +48,7 @@ final class MenuBarController: NSObject {
             button.addSubview(toastView)
         }
         toastView.onClick = { [weak self] in self?.handleStatusClick() }
+        toastView.onHover = { [weak self] inside in self?.handleHover(inside) }
 
         // Clicking a floating (over-full-screen) toast jumps to that session too.
         toastPanel.onFocus = { [weak self] cwd, name in
@@ -93,14 +99,78 @@ final class MenuBarController: NSObject {
     }
 
     private func togglePopover() {
-        guard let button = statusItem.button else { return }
         if popover.isShown {
+            openedByHover = false
             popover.performClose(nil)
         } else {
-            dismissToast()
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
+            showPopover(takeKey: true)
         }
+    }
+
+    /// `takeKey` is false for hover-opened menus: grabbing key focus while the
+    /// user is typing in their terminal would be hostile. A click still takes it.
+    private func showPopover(takeKey: Bool) {
+        guard let button = statusItem.button, !popover.isShown else { return }
+        dismissToast()
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        if takeKey { popover.contentViewController?.view.window?.makeKey() }
+    }
+
+    // MARK: - Open on hover
+
+    private func handleHover(_ inside: Bool) {
+        guard AppSettings.shared.openOnHover else { return }
+        if inside {
+            hoverCloseTimer?.invalidate()
+            guard !popover.isShown, !showingToast else { return }
+            // Small delay so sweeping the pointer across the menu bar on the way
+            // somewhere else doesn't pop the menu open.
+            hoverOpenTimer?.invalidate()
+            hoverOpenTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, !self.popover.isShown, !self.showingToast else { return }
+                    self.openedByHover = true
+                    self.showPopover(takeKey: false)
+                }
+            }
+        } else {
+            hoverOpenTimer?.invalidate()
+            scheduleHoverClose()
+        }
+    }
+
+    /// Poll after hover-out: the pointer has to travel off the item and across
+    /// the popover's arrow to reach the menu, so closing on the exit event alone
+    /// would snap it shut mid-reach. Keep it open while the pointer is over
+    /// either the item or the menu.
+    private func scheduleHoverClose() {
+        guard openedByHover else { return }
+        hoverCloseTimer?.invalidate()
+        hoverCloseTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                guard self.openedByHover, self.popover.isShown else {
+                    self.hoverCloseTimer?.invalidate(); return
+                }
+                guard !self.pointerIsOverMenuOrItem() else { return }
+                self.hoverCloseTimer?.invalidate()
+                self.openedByHover = false
+                self.popover.performClose(nil)
+            }
+        }
+    }
+
+    private func pointerIsOverMenuOrItem() -> Bool {
+        let p = NSEvent.mouseLocation
+        // Pad the rects so the gap between the item and the popover arrow reads
+        // as "still hovering" rather than an exit.
+        if let window = popover.contentViewController?.view.window,
+           window.frame.insetBy(dx: -8, dy: -8).contains(p) { return true }
+        if let button = statusItem.button, let window = button.window {
+            let rect = window.convertToScreen(button.convert(button.bounds, to: nil))
+            if rect.insetBy(dx: -8, dy: -12).contains(p) { return true }
+        }
+        return false
     }
 
     // MARK: - Test hook
@@ -122,7 +192,7 @@ final class MenuBarController: NSObject {
         debugForcePanel = forcePanel
         let count = max(1, min(n, 8))
         for i in 1...count {
-            queue.append(.init(text: "Test toast \(i) of \(count)", accent: i.isMultiple(of: 2) ? .red : .amber))
+            queue.append(.init(text: "Test toast \(i) of \(count)", accent: i.isMultiple(of: 2) ? .attention : .ready))
         }
         if !showingToast { showNext() }
     }
@@ -188,14 +258,14 @@ final class MenuBarController: NSObject {
     /// that notifies on its own (muxy) — checked off-main since it locates the pane.
     private func firePermissionToast(text: String, cwd: String, name: String) {
         guard AppSettings.shared.deferTerminalNotifications, !cwd.isEmpty else {
-            enqueueRaw(text: text, accent: .red, cwd: cwd, name: name)
+            enqueueRaw(text: text, accent: .attention, cwd: cwd, name: name)
             return
         }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let selfNotifies = ProcessCorrelator.terminalSelfNotifies(cwd: cwd)
             Task { @MainActor in
                 guard let self, !selfNotifies else { return }
-                self.enqueueRaw(text: text, accent: .red, cwd: cwd, name: name)
+                self.enqueueRaw(text: text, accent: .attention, cwd: cwd, name: name)
             }
         }
     }
@@ -223,7 +293,7 @@ final class MenuBarController: NSObject {
     // MARK: - Toast queue
 
     private func enqueue(_ session: Session) {
-        let accent: ToastStatusView.Accent = (session.state == .waitingPermission || session.state == .error) ? .red : .amber
+        let accent: ToastStatusView.Accent = (session.state == .waitingPermission || session.state == .error) ? .attention : .ready
         let toast = ToastStatusView.Toast(
             text: "\(session.name) — \(session.state.label)", accent: accent,
             focusCWD: session.cwd, focusName: session.name)
@@ -253,7 +323,7 @@ final class MenuBarController: NSObject {
     /// focused screen: a panel if that screen is full-screen, else the menu-bar-item
     /// toast.
     private func routeToast(_ toast: ToastStatusView.Toast) {
-        let accent: ToastAccent = toast.accent == .red ? .red : .amber
+        let accent: ToastAccent = toast.accent == .attention ? .attention : .ready
 
         if AppSettings.shared.fireOnAllScreens {
             toastPanel.show(text: toast.text, accent: accent,
@@ -310,7 +380,7 @@ final class MenuBarController: NSObject {
 
     private func playSound(_ accent: ToastStatusView.Accent) {
         guard AppSettings.shared.soundEnabled else { return }
-        let name = accent == .red ? AppSettings.shared.permissionSound : AppSettings.shared.waitingSound
+        let name = accent == .attention ? AppSettings.shared.permissionSound : AppSettings.shared.waitingSound
         NSSound(named: name)?.play()
     }
 
@@ -365,6 +435,8 @@ extension MenuBarController: NSPopoverDelegate {
     /// Drain any toasts that arrived while the popover was open (showNext
     /// early-returns while it's shown, so they'd otherwise be stranded).
     func popoverDidClose(_ notification: Notification) {
+        openedByHover = false
+        hoverCloseTimer?.invalidate()
         if !showingToast, !queue.isEmpty { showNext() }
     }
 }

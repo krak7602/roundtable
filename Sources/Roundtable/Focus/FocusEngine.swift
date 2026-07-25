@@ -43,11 +43,21 @@ enum FocusEngine {
         let env = loc.paneEnv
         let terminal = (loc.terminalApp ?? "").lowercased()
 
-        // muxy: `muxy <path>` focuses the workspace for that directory. That is
-        // the finest target muxy's CLI exposes, and since each worktree has its
-        // own cwd, it already lands on the right pane.
-        if terminal.contains("muxy") || env["MUXY_PROJECT_ID"] != nil {
-            _ = run(muxyPath(), [cwd])
+        // muxy: switch to the exact worktree via the command socket. `muxy <path>`
+        // only opens the *project*, so with several worktrees per project it lands
+        // on the wrong one (or spawns a new one). `switch-worktree|id|project` goes
+        // straight to the right worktree; fall back to opening the project only if
+        // we somehow lack the worktree id.
+        if terminal.contains("muxy") || env["MUXY_PANE_ID"] != nil || env["MUXY_PROJECT_ID"] != nil {
+            if let worktree = env["MUXY_WORKTREE_ID"], !worktree.isEmpty {
+                let project = env["MUXY_PROJECT_ID"] ?? ""
+                MuxyControl.send(project.isEmpty ? "switch-worktree|\(worktree)"
+                                                 : "switch-worktree|\(worktree)|\(project)")
+            } else if let project = env["MUXY_PROJECT_ID"], !project.isEmpty {
+                MuxyControl.send("switch-project|\(project)")
+            } else {
+                _ = run(muxyPath(), [cwd])
+            }
             return
         }
 

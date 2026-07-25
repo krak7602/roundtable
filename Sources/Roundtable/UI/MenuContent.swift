@@ -1,190 +1,462 @@
 import SwiftUI
+import Foundation
+import AppKit
 
 /// The dropdown that opens from the menu-bar icon: a list of sessions, attention
-/// first, each row a single glanceable line. Clicking a row focuses its pane.
+/// first. No masthead — identity, count, and actions live in the footer toolbar.
+/// Status is the four-dot logo, alive: pulsing amber (needs you), steady green
+/// (your turn), a gray highlight going around (working), or dim (idle).
 struct MenuContent: View {
     @ObservedObject var store: SessionStore
     var onSettings: () -> Void = {}
 
-    /// The row expanded into a full-height peek (takes over the menu). Only one
-    /// at a time, so the peek gets the whole panel.
+    /// The row expanded into a full-height peek (takes over the menu).
     @State private var expandedID: String?
 
-    private func toggle(_ id: String) {
-        expandedID = (expandedID == id) ? nil : id
+    /// Which row the pointer is over, and where across it. Held here (not in the
+    /// row) so it survives the rebuild when a row expands.
+    @State private var hoverRowID: String?
+    @State private var hoverX: CGFloat = 0
+
+    private func toggle(_ id: String) { expandedID = (expandedID == id) ? nil : id }
+
+    /// One builder for both the list and the expanded takeover, so a row behaves
+    /// identically either way.
+    private func row(for session: Session, expanded: Bool) -> some View {
+        SessionRow(
+            session: session,
+            commandOverride: store.pendingApproval(for: session)?.preview,
+            isExpanded: expanded,
+            hoverFraction: hoverRowID == session.id ? hoverX : nil,
+            onHover: { fraction in
+                if let fraction {
+                    hoverRowID = session.id
+                    hoverX = fraction
+                } else if hoverRowID == session.id {
+                    hoverRowID = nil
+                }
+            },
+            onOpen: { FocusEngine.focus(session) },
+            onToggle: { toggle(session.id) })
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
-
             if store.sessions.isEmpty {
                 Text("No active sessions")
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14).padding(.vertical, 14)
             } else if let id = expandedID, let session = store.sessions.first(where: { $0.id == id }) {
                 // Peek takeover: just this session, given the whole panel.
-                SessionRow(session: session, isExpanded: true, onToggle: { expandedID = nil })
-                    .contentShape(Rectangle())
-                    .onTapGesture { FocusEngine.focus(session) }
+                row(for: session, expanded: true)
                 if let pa = store.pendingApproval(for: session) {
-                    ApprovalBar(
-                        approval: pa,
-                        onAllow: { answer(pa, .allow) },
-                        onDeny:  { answer(pa, .deny) },
-                        onJump:  { FocusEngine.focus(session) })
+                    ApprovalButtons(canAnswer: pa.canAnswer,
+                                    onAllow: { answer(pa, .allow) },
+                                    onDeny:  { answer(pa, .deny) },
+                                    onJump:  { FocusEngine.focus(session) })
                 }
-                Divider().opacity(0.4)
+                Divider().opacity(0.35)
                 PeekView(session: session, onJump: { FocusEngine.focus(session) })
             } else {
                 ForEach(store.sessions) { session in
                     VStack(alignment: .leading, spacing: 0) {
-                        SessionRow(session: session,
-                                   isExpanded: false,
-                                   onToggle: { toggle(session.id) })
-                            .contentShape(Rectangle())
-                            .onTapGesture { FocusEngine.focus(session) }
+                        row(for: session, expanded: false)
                         if let pa = store.pendingApproval(for: session) {
-                            ApprovalBar(
-                                approval: pa,
-                                onAllow: { answer(pa, .allow) },
-                                onDeny:  { answer(pa, .deny) },
-                                onJump:  { FocusEngine.focus(session) })
+                            ApprovalButtons(canAnswer: pa.canAnswer,
+                                            onAllow: { answer(pa, .allow) },
+                                            onDeny:  { answer(pa, .deny) },
+                                            onJump:  { FocusEngine.focus(session) })
                         }
                     }
-                    Divider().opacity(0.4)
+                    Divider().opacity(0.35)
                 }
             }
 
-            footer
+            MenuFooter(attentionCount: store.attentionCount, totalCount: store.sessions.count, onSettings: onSettings)
         }
         .frame(width: 340)
+        .padding(.top, 6)
     }
 
-    /// Type the answer into the terminal, then drop the prompt from the menu.
     private func answer(_ pa: PendingApproval, _ decision: ApprovalDecision) {
         AnswerInjector.answer(cwd: pa.cwd, harness: pa.harness, decision: decision)
         store.clearApproval(pa)
     }
+}
 
-    private var header: some View {
-        HStack {
-            Text("Roundtable").font(.headline)
-            Spacer()
-            if store.attentionCount > 0 {
-                Text("\(store.attentionCount) waiting")
-                    .font(.caption).bold()
-                    .foregroundStyle(.green)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 10)
-        .padding(.bottom, 6)
+// MARK: - Session row
+
+/// One row, one click — what the click does follows the pointer. Out in the
+/// body of the row it opens the session; as you reach the last quarter the row
+/// hands over: the content recedes (dim + soft blur) and the chevron takes
+/// focus, so the peek is clearly what you're about to hit. No visible split,
+/// no small target. Right-click offers both actions outright.
+struct SessionRow: View {
+    let session: Session
+    var commandOverride: String? = nil
+    var isExpanded: Bool = false
+
+    /// Pointer position across the row (0…1), or nil when it's elsewhere. Owned
+    /// by the parent: expanding rebuilds this row, and local @State would reset
+    /// to "not hovering" — so a second click without moving would open the
+    /// session instead of collapsing the peek.
+    var hoverFraction: CGFloat?
+    var onHover: (CGFloat?) -> Void = { _ in }
+    var onOpen: () -> Void = {}
+    var onToggle: () -> Void = {}
+
+    @State private var rowWidth: CGFloat = 0
+
+    /// Past this fraction of the row, a click means "peek" rather than "open".
+    private let handover: CGFloat = 0.75
+    /// The blur is a gradient in space: none at `fadeStart`, ramping to full by
+    /// `fadeFull` and staying there to the right edge. Reaching full well before
+    /// the edge matters — ramping all the way to 100% would put peak blur on the
+    /// trailing padding, where there's nothing to see.
+    private let fadeStart: CGFloat = 0.45
+    private let fadeFull: CGFloat = 0.70
+
+    private var hovering: Bool { hoverFraction != nil }
+    private var overExpand: Bool { (hoverFraction ?? -1) > handover }
+
+    /// How far into the handover zone the pointer is, 0 at the 75% line rising
+    /// to 1 at the right edge, eased so it's felt early rather than only at the
+    /// very edge.
+    private var progress: CGFloat {
+        guard let x = hoverFraction else { return 0 }
+        let raw = min(max((x - handover) / (1 - handover), 0), 1)
+        return sqrt(raw)
     }
 
-    private var footer: some View {
-        HStack {
-            Button("Settings…", action: onSettings)
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .font(.caption)
-            Spacer()
-            Button("Quit") { NSApplication.shared.terminate(nil) }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .font(.caption)
+    var body: some View {
+        recedingContent
+            .overlay(alignment: .trailing) { chevron.padding(.trailing, 12) }
+            .background(Color.primary.opacity(hovering && !overExpand ? 0.055 : 0))
+            .background(GeometryReader { g in
+                Color.clear
+                    .onAppear { rowWidth = g.size.width }
+                    .onChange(of: g.size.width) { _, w in rowWidth = w }
+            })
+            .contentShape(Rectangle())
+            .onContinuousHover(coordinateSpace: .local) { phase in
+                switch phase {
+                case .active(let p): onHover(rowWidth > 0 ? p.x / rowWidth : 0)
+                case .ended:         onHover(nil)
+                }
+            }
+            .onTapGesture { overExpand ? onToggle() : onOpen() }
+            .animation(.easeOut(duration: 0.12), value: hovering)
+            .contextMenu {
+                Button("Open Session", action: onOpen)
+                Button(isExpanded ? "Hide Recent Activity" : "Peek at Recent Activity", action: onToggle)
+            }
+    }
+
+    /// The row, with its right end blurring out under the pointer. Two copies
+    /// with complementary masks — sharp on the left, blurred on the right — so
+    /// every pixel is one or the other. (Layering a blurred copy *over* the sharp
+    /// one instead would just ghost it, which reads as muddy rather than blurred.)
+    /// No dimming: this is a blur, and a scrim would only make it look faded.
+    private var recedingContent: some View {
+        ZStack(alignment: .leading) {
+            content.mask(mask(sharp: true))
+            content
+                .blur(radius: 9 * progress)
+                .mask(mask(sharp: false))
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+    }
+
+    /// Complementary left-to-right gradients: the sharp copy fades out across
+    /// the transition, the blurred copy fades in over exactly the same span, and
+    /// past `fadeFull` the blurred copy is all that remains.
+    private func mask(sharp: Bool) -> LinearGradient {
+        LinearGradient(
+            stops: [
+                .init(color: sharp ? .black : .clear, location: fadeStart),
+                .init(color: sharp ? .clear : .black, location: fadeFull),
+                .init(color: sharp ? .clear : .black, location: 1.0),
+            ],
+            startPoint: .leading, endPoint: .trailing)
+    }
+
+    private var content: some View {
+        HStack(alignment: .top, spacing: 11) {
+            StatusDots(state: session.state)
+                .frame(width: 15, height: 15)
+                .padding(.top, 3)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(session.name)
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    Text(session.project)
+                        .font(.system(size: 11)).foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+                HStack(spacing: 8) {
+                    lineTwo.lineLimit(1)
+                    Spacer(minLength: 6)
+                    Text(RelativeTime.short(session.updatedAt))
+                        .font(.system(size: 10.5)).foregroundStyle(.tertiary).monospacedDigit()
+                    HarnessIcon(harness: session.harness)
+                }
+            }
+        }
+        .padding(.leading, 14).padding(.trailing, 34)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Comes forward as the row recedes, in step with the same progress value.
+    private var chevron: some View {
+        Image(systemName: "chevron.down")
+            .font(.system(size: 10 + 2 * progress, weight: .semibold))
+            .foregroundStyle(Color.primary.opacity(0.3 + 0.65 * progress))
+            .rotationEffect(.degrees(isExpanded ? 180 : 0))
+            .frame(width: 24, height: 24)
+            .background(Circle().fill(Color.primary.opacity(0.13 * progress)))
+            .animation(.easeOut(duration: 0.18), value: isExpanded)
+            .allowsHitTesting(false)   // the row owns the click; position decides
+    }
+
+    @ViewBuilder private var lineTwo: some View {
+        if let cmd = commandOverride, !cmd.isEmpty {
+            Text(cmd).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
+        } else {
+            Text(session.lastLine.isEmpty ? session.state.label : session.lastLine)
+                .font(.system(size: 11.5)).foregroundStyle(.secondary)
+        }
     }
 }
 
-/// The action row under a session that's blocked on a permission prompt: the
-/// command being requested, then Allow / Deny (when we can drive the terminal)
-/// and always Jump. No "always allow" by design — that's consequential and rare,
-/// so it's a deliberate trip to the terminal via Jump.
-struct ApprovalBar: View {
-    let approval: PendingApproval
+// MARK: - Status dots (the logo, alive)
+
+struct StatusDots: View {
+    let state: SessionState
+    var body: some View {
+        switch state {
+        case .waitingPermission, .error: PulsingDots(color: RTColor.attention)
+        case .waitingInput, .done:       DotGrid(color: RTColor.ready, opacities: [1, 1, 1, 1])
+        case .working:                   TravelingDots()
+        case .idle:                      DotGrid(color: RTColor.idle, opacities: [0.4, 0.4, 0.4, 0.4])
+        }
+    }
+}
+
+/// Four dots in a 2×2, each with its own opacity — the shared geometry.
+private struct DotGrid: View {
+    let color: Color
+    let opacities: [Double]
+    private let box: CGFloat = 12
+    private let dot: CGFloat = 3.3
+
+    var body: some View {
+        let a = box * 0.28, b = box * 0.72
+        let c = [CGPoint(x: a, y: a), CGPoint(x: b, y: a), CGPoint(x: a, y: b), CGPoint(x: b, y: b)]
+        ZStack {
+            ForEach(0..<4, id: \.self) { i in
+                Circle().fill(color).frame(width: dot, height: dot)
+                    .opacity(opacities[i]).position(c[i])
+            }
+        }
+        .frame(width: box, height: box)
+    }
+}
+
+/// Needs-permission: the whole table brightens and dims together, like a heartbeat.
+private struct PulsingDots: View {
+    let color: Color
+    var body: some View {
+        TimelineView(.animation) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            let o = 0.32 + 0.68 * (0.5 + 0.5 * sin(t * 2 * .pi / 1.5))
+            DotGrid(color: color, opacities: [o, o, o, o])
+        }
+    }
+}
+
+/// Working: a bright highlight travels clockwise around the four seats.
+private struct TravelingDots: View {
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.375)) { ctx in
+            let step = Int(ctx.date.timeIntervalSinceReferenceDate / 0.375) % 4
+            TravelFrame(step: step)
+        }
+    }
+}
+
+private struct TravelFrame: View {
+    let step: Int
+    private let order = [0, 1, 3, 2]   // clockwise: TL, TR, BR, BL
+    var body: some View {
+        let lit = order[step % 4]
+        DotGrid(color: RTColor.busy, opacities: (0..<4).map { $0 == lit ? 1.0 : 0.22 })
+            .animation(.easeInOut(duration: 0.28), value: step)
+    }
+}
+
+// MARK: - Harness icon (right end of line 2)
+
+/// The harness's real mark, identifying which tool the session belongs to. The
+/// bundled logo loads in the packaged app; a drawn shape stands in under
+/// `swift run` (no bundle) so the row never goes blank.
+struct HarnessIcon: View {
+    let harness: Harness
+    var body: some View {
+        Group {
+            if let img = Self.logo(for: harness) {
+                // Template = ignore the logo's own color, tint it gray to sit
+                // quietly as metadata alongside the calm palette.
+                Image(nsImage: img).renderingMode(.template).resizable().scaledToFit()
+                    .frame(width: 14, height: 14)
+            } else {
+                fallback.frame(width: 15, height: 15)
+            }
+        }
+        .foregroundStyle(.primary.opacity(0.5))
+    }
+
+    private static func assetName(_ h: Harness) -> String {
+        switch h {
+        case .claudeCode: return "claude"
+        case .codex:      return "codex"
+        case .pi:         return "pi"
+        case .ohMyPi:     return "omp"
+        }
+    }
+
+    private static func logo(for h: Harness) -> NSImage? {
+        guard let url = Bundle.main.url(forResource: assetName(h), withExtension: "png", subdirectory: "HarnessIcons")
+        else { return nil }
+        return NSImage(contentsOf: url)
+    }
+
+    @ViewBuilder private var fallback: some View {
+        switch harness {
+        case .claudeCode: Sunburst(points: 10).frame(width: 12.5, height: 12.5)
+        case .codex:      Image(systemName: "hexagon.fill").font(.system(size: 10.5))
+        case .pi:         Text("π").font(.system(size: 12.5, weight: .semibold))
+        case .ohMyPi:     Image(systemName: "diamond.fill").font(.system(size: 10.5))
+        }
+    }
+}
+
+/// A radial sunburst — a filled many-pointed star, standing in for Claude's mark.
+struct Sunburst: Shape {
+    var points: Int = 10
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        let c = CGPoint(x: rect.midX, y: rect.midY)
+        let outer = min(rect.width, rect.height) / 2
+        let inner = outer * 0.44
+        let n = points * 2
+        for i in 0..<n {
+            let r = i.isMultiple(of: 2) ? outer : inner
+            let a = (Double(i) / Double(n)) * 2 * .pi - .pi / 2
+            let pt = CGPoint(x: c.x + CGFloat(cos(a)) * r, y: c.y + CGFloat(sin(a)) * r)
+            i == 0 ? p.move(to: pt) : p.addLine(to: pt)
+        }
+        p.closeSubpath()
+        return p
+    }
+}
+
+// MARK: - Approval actions (command shows on the row's line 2)
+
+struct ApprovalButtons: View {
+    let canAnswer: Bool
     var onAllow: () -> Void
     var onDeny: () -> Void
     var onJump: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(approval.preview)
-                .font(.system(.caption, design: .monospaced))
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 8).padding(.vertical, 5)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 6))
-
-            HStack(spacing: 8) {
-                if approval.canAnswer {
-                    Button("Allow", action: onAllow).tint(.green)
-                    Button("Deny", action: onDeny).tint(.red)
-                } else {
-                    Text("Answer in the terminal")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("Jump", action: onJump)
+        HStack(spacing: 7) {
+            if canAnswer {
+                Button("Allow", action: onAllow).buttonStyle(RTButton(kind: .primary))
+                Button("Deny", action: onDeny).buttonStyle(RTButton(kind: .neutral))
+            } else {
+                Text("Answer in the terminal").font(.system(size: 11)).foregroundStyle(.secondary)
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            Spacer(minLength: 8)
+            Button("Jump", action: onJump).buttonStyle(RTButton(kind: .neutral))
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 2).padding(.bottom, 10)
+        .padding(.leading, 40).padding(.trailing, 14)
+        .padding(.top, 1).padding(.bottom, 10)
     }
 }
 
-struct SessionRow: View {
-    let session: Session
-    var isExpanded: Bool = false
-    var onToggle: () -> Void = {}
+struct RTButton: ButtonStyle {
+    enum Kind { case primary, neutral }
+    let kind: Kind
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 11.5, weight: .semibold))
+            .padding(.horizontal, 12).padding(.vertical, 4)
+            .background(bg(configuration.isPressed), in: RoundedRectangle(cornerRadius: 7))
+            .foregroundStyle(kind == .primary ? Color(red: 0.02, green: 0.21, blue: 0.07) : .primary)
+    }
+    private func bg(_ pressed: Bool) -> Color {
+        switch kind {
+        case .primary: return RTColor.ready.opacity(pressed ? 0.82 : 1)
+        case .neutral: return Color.white.opacity(pressed ? 0.16 : 0.09)
+        }
+    }
+}
+
+// MARK: - Footer toolbar
+
+struct MenuFooter: View {
+    let attentionCount: Int
+    let totalCount: Int
+    var onSettings: () -> Void
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Text(session.state.dot)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(session.name)
-                        .font(.system(.body, design: .rounded)).bold()
-                        .lineLimit(1)
-                    Text(session.harness.shortName)
-                        .font(.caption2)
-                        .padding(.horizontal, 4).padding(.vertical, 1)
-                        .background(.quaternary, in: Capsule())
-                    Spacer()
-                    Text(session.project)
-                        .font(.caption2).foregroundStyle(.secondary)
-                        .lineLimit(1)
+        ZStack {
+            count
+            HStack {
+                Image(systemName: "circle.grid.2x2.fill")
+                    .font(.system(size: 12)).foregroundStyle(.tertiary)   // quiet — not a focus point
+                Spacer()
+                HStack(spacing: 2) {
+                    toolButton("gearshape", action: onSettings)
+                    toolButton("power", action: { NSApplication.shared.terminate(nil) })
                 }
-                Text(session.lastLine.isEmpty ? session.state.label : session.lastLine)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
             }
-            // Peek toggle. Its own button so tapping it expands rather than
-            // jumping (the rest of the row still jumps).
-            Button(action: onToggle) {
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                    .rotationEffect(.degrees(isExpanded ? 180 : 0))
-                    .frame(width: 16, height: 16)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 13).padding(.vertical, 8)
+        .overlay(alignment: .top) { Divider().opacity(0.4) }
+    }
+
+    @ViewBuilder private var count: some View {
+        if attentionCount > 0 {
+            (Text("\(attentionCount)").font(.system(size: 11.5, weight: .semibold)).monospacedDigit()
+                .foregroundColor(.primary)
+             + Text(" waiting").font(.system(size: 11.5)).foregroundColor(.secondary))
+        } else {
+            Text(totalCount == 0 ? "No sessions" : "All clear")
+                .font(.system(size: 11.5)).foregroundStyle(.secondary)
+        }
+    }
+
+    private func toolButton(_ symbol: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 13))
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
     }
 }
 
-/// Full-height peek: the session's recent activity (Claude transcript, else the
-/// live screen), shown plainly so you can triage without switching. Sizes to its
-/// content up to a cap, and pins to the newest line at the bottom.
+// MARK: - Peek (unchanged)
+
+/// Full-height peek: the session's recent activity, shown plainly so you can
+/// triage without switching. Sizes to its content up to a cap, pins to newest.
 struct PeekView: View {
     let session: Session
     var onJump: () -> Void
@@ -215,9 +487,6 @@ struct PeekView: View {
                         })
                     }
                     .frame(height: min(max(measured, 40), maxHeight))
-                    // Once the async height measurement settles (or the items
-                    // change), pin the bottom into view. defaultScrollAnchor
-                    // alone doesn't survive the 0→full height jump.
                     .onPreferenceChange(PeekHeightKey.self) { h in
                         measured = h
                         DispatchQueue.main.async { proxy.scrollTo("peekEnd", anchor: .bottom) }
@@ -240,7 +509,7 @@ struct PeekView: View {
                 }
                 .buttonStyle(.borderless).foregroundStyle(.secondary)
                 Spacer()
-                Button("Jump", action: onJump).buttonStyle(.borderedProminent).controlSize(.small)
+                Button("Jump", action: onJump).buttonStyle(RTButton(kind: .neutral))
             }
         }
         .padding(.horizontal, 14)

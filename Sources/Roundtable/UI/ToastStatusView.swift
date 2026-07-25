@@ -9,17 +9,20 @@ import AppKit
 /// peripheral cue in place, so the user is nudged and never interrupted.
 final class ToastStatusView: NSView {
     var onClick: (() -> Void)?
+    /// Pointer entered (true) or left (false) the item, for hover-to-open.
+    var onHover: ((Bool) -> Void)?
 
+    /// Shared with the menu dots (see RTColor): amber = needs you, green = ready.
     enum Accent {
-        case amber, red
+        case attention, ready
         var gradient: NSGradient? {
             switch self {
-            case .amber: return NSGradient(
+            case .attention: return NSGradient(
                 starting: NSColor(calibratedRed: 1.0, green: 0.83, blue: 0.30, alpha: 1),
-                ending:   NSColor(calibratedRed: 0.98, green: 0.68, blue: 0.11, alpha: 1))
-            case .red: return NSGradient(
-                starting: NSColor(calibratedRed: 1.0, green: 0.45, blue: 0.35, alpha: 1),
-                ending:   NSColor(calibratedRed: 0.90, green: 0.23, blue: 0.19, alpha: 1))
+                ending:   NSColor(calibratedRed: 0.98, green: 0.69, blue: 0.13, alpha: 1))
+            case .ready: return NSGradient(
+                starting: NSColor(calibratedRed: 0.46, green: 0.90, blue: 0.56, alpha: 1),
+                ending:   NSColor(calibratedRed: 0.20, green: 0.74, blue: 0.36, alpha: 1))
             }
         }
     }
@@ -107,15 +110,18 @@ final class ToastStatusView: NSView {
         str.draw(with: rect, options: [.truncatesLastVisibleLine, .usesLineFragmentOrigin])
     }
 
+    /// Monochrome on purpose: this badge sits in the menu bar all day, so it
+    /// stays neutral (labelColor adapts to a light or dark bar) and lets the
+    /// toast carry the color when something actually needs you.
     private func drawBadge(count: Int, in b: NSRect) {
         let d: CGFloat = 13
         let rect = NSRect(x: iconInset + 12, y: b.height - d - 2, width: d, height: d)
-        NSColor(calibratedRed: 0.98, green: 0.68, blue: 0.11, alpha: 1).set()
+        NSColor.labelColor.set()
         NSBezierPath(ovalIn: rect).fill()
         let s = "\(min(count, 9))"
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 9, weight: .bold),
-            .foregroundColor: NSColor.black,
+            .foregroundColor: NSColor.windowBackgroundColor,
         ]
         let size = (s as NSString).size(withAttributes: attrs)
         (s as NSString).draw(
@@ -126,4 +132,20 @@ final class ToastStatusView: NSView {
     override func mouseDown(with event: NSEvent) {
         onClick?()
     }
+
+    // Hover tracking for open-on-hover. `.activeAlways` matters: we're a
+    // background (accessory) app, so the default active-app-only tracking would
+    // never fire. `.inVisibleRect` keeps the area right as the item animates
+    // width during a toast.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self, userInfo: nil))
+    }
+
+    override func mouseEntered(with event: NSEvent) { onHover?(true) }
+    override func mouseExited(with event: NSEvent) { onHover?(false) }
 }

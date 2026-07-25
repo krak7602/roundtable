@@ -24,6 +24,10 @@ struct SettingsView: View {
                 Text("Off: shows on the screen you're focused on — a floating pill over full-screen apps, or the menu-bar item otherwise. On: a pill on every screen, each placed for that screen's state.")
                     .font(.caption).foregroundStyle(.secondary)
 
+                Toggle("Open the list on hover", isOn: $settings.openOnHover)
+                Text("Point at the menu-bar icon to open the session list, without clicking. It closes when you move away.")
+                    .font(.caption).foregroundStyle(.secondary)
+
                 Toggle("Don't duplicate the terminal's own notifications", isOn: $settings.deferTerminalNotifications)
                 Text("On: skip our permission toast for a session whose terminal already notifies you (muxy), so you aren't alerted twice. The menu row and its Allow/Deny still appear.")
                     .font(.caption).foregroundStyle(.secondary)

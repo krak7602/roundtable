@@ -9,6 +9,9 @@ Roundtable.app/
 # but ignore the pattern so a stray copy is never committed
 *.roundtable-backup
 
+# Design scratch (HTML iterations + session notes from the design tooling)
+.concepteur/
+
 # macOS
 .DS_Store
 

@@ -24,6 +24,9 @@ final class AppSettings: ObservableObject {
     /// and its Allow/Deny still appear; only our toast is suppressed.
     @Published var deferTerminalNotifications: Bool { didSet { d.set(deferTerminalNotifications, forKey: "deferTerminalNotifications") } }
 
+    /// On: pointing at the menu-bar item opens the session list, no click needed.
+    @Published var openOnHover: Bool { didSet { d.set(openOnHover, forKey: "openOnHover") } }
+
     private init() {
         soundEnabled = d.object(forKey: "soundEnabled") as? Bool ?? true
         waitingSound = d.string(forKey: "waitingSound") ?? "Glass"
@@ -31,6 +34,7 @@ final class AppSettings: ObservableObject {
         hiddenHarnesses = Set(d.stringArray(forKey: "hiddenHarnesses") ?? [])
         fireOnAllScreens = d.bool(forKey: "fireOnAllScreens")
         deferTerminalNotifications = d.bool(forKey: "deferTerminalNotifications")
+        openOnHover = d.object(forKey: "openOnHover") as? Bool ?? true
     }
 
     func isEnabled(_ harness: Harness) -> Bool { !hiddenHarnesses.contains(harness.shortName) }

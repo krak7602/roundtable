@@ -30,9 +30,11 @@ final class ToastPanelWindow {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.level = .screenSaver
-        // The pill catches clicks; everywhere else stays click-through (the hit
-        // view returns nil outside the pill rect, so events fall to the app below).
-        panel.ignoresMouseEvents = false
+        // Must be fully click-through: a mouse-accepting window can't overlay
+        // another app's full-screen space, which is this panel's whole reason to
+        // exist. (Trade-off: the floating pill isn't clickable — the menu-bar-item
+        // toast still handles click-to-jump for the windowed case.)
+        panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         host.frame = NSRect(origin: .zero, size: panelSize)
@@ -175,19 +177,20 @@ final class ToastPanelController {
 }
 
 enum ToastAccent {
-    case amber, red
+    case attention, ready
     /// Accent color for the icon + faint state wash over the native material.
+    /// Same palette as the menu dots (RTColor): amber = needs you, green = ready.
     var color: Color {
         switch self {
-        case .amber: return Color(red: 1.0, green: 0.60, blue: 0.05)
-        case .red:   return Color(red: 0.93, green: 0.24, blue: 0.20)
+        case .attention: return RTColor.attention
+        case .ready:     return RTColor.ready
         }
     }
 }
 
 final class ToastPillModel: ObservableObject {
     @Published var text = ""
-    @Published var accent: ToastAccent = .amber
+    @Published var accent: ToastAccent = .attention
     @Published var shown = false
 }
 
