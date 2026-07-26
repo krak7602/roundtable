@@ -10,6 +10,9 @@ struct SettingsView: View {
     @State private var codexHook = CodexHookInstaller.isInstalled()
     @State private var ompHook = OmpHookInstaller.isInstalled()
     @State private var hookNote = ""
+    @State private var numberJumps = HotkeyManager.shared.numberJumpsEnabled
+    /// Bumped after a recording so the buttons redraw with the new combination.
+    @State private var shortcutRevision = 0
 
     var body: some View {
         Form {
@@ -19,18 +22,46 @@ struct SettingsView: View {
                 soundPicker("Permission", selection: $settings.permissionSound)
             }
 
+            // Parked, not removed: Roundtable ships as the floating orb for now.
+            // The menu-bar presentation still works end to end — put this section
+            // back to offer the choice again.
+            //
+            // Section("Where it lives") {
+            //     Picker("Show Roundtable in", selection: $settings.presentation) {
+            //         ForEach(Presentation.allCases) { Text($0.label).tag($0) }
+            //     }
+            //     .pickerStyle(.radioGroup)
+            // }
+
             Section("Display") {
                 Toggle("Show toasts on all screens", isOn: $settings.fireOnAllScreens)
-                Text("Off: shows on the screen you're focused on — a floating pill over full-screen apps, or the menu-bar item otherwise. On: a pill on every screen, each placed for that screen's state.")
-                    .font(.caption).foregroundStyle(.secondary)
-
-                Toggle("Open the list on hover", isOn: $settings.openOnHover)
-                Text("Point at the menu-bar icon to open the session list, without clicking. It closes when you move away.")
+                Text("Off: alerts appear on the screen you're focused on. On: on every screen, each placed for that screen's state.")
                     .font(.caption).foregroundStyle(.secondary)
 
                 Toggle("Don't duplicate the terminal's own notifications", isOn: $settings.deferTerminalNotifications)
-                Text("On: skip our permission toast for a session whose terminal already notifies you (muxy), so you aren't alerted twice. The menu row and its Allow/Deny still appear.")
+                Text("On: stay quiet for a session whose terminal already notifies you (muxy), so you aren't alerted twice. The session still appears in the list with its Allow/Deny.")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section("Shortcuts") {
+                ForEach(HotkeyAction.allCases) { action in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(action.label)
+                            Text(action.detail).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        ShortcutRecorder(action: action, onChange: { shortcutRevision += 1 })
+                            .frame(width: 116, height: 22)
+                            .id("\(action.rawValue)-\(shortcutRevision)")
+                    }
+                }
+                Toggle("Jump to a session with its number", isOn: $numberJumps)
+                    .onChange(of: numberJumps) { _, on in HotkeyManager.shared.numberJumpsEnabled = on }
+                Text("⌘⌥1 through ⌘⌥9 go straight to the first nine sessions in the list.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("Click a shortcut and press the keys you want. Escape cancels, Delete clears it. A combination already taken by another app won't register.")
+                    .font(.caption2).foregroundStyle(.tertiary)
             }
 
             Section("Show harnesses") {

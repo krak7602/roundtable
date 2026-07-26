@@ -4,38 +4,50 @@
 
 <h1 align="center">Roundtable</h1>
 
-<p align="center"><b>One place in your menu bar for every AI coding session you're running.</b></p>
+<p align="center"><b>Every AI coding session you're running, one glance away.</b></p>
 
 
-Roundtable watches your ongoing coding-agent sessions and tells you the moment
-one needs you. It supports [Claude Code](https://docs.claude.com/en/docs/claude-code),
+Roundtable is a small glass dot you drop anywhere on your screen. It watches your
+ongoing coding-agent sessions and tells you the moment one needs you. It supports
+[Claude Code](https://docs.claude.com/en/docs/claude-code),
 [Codex](https://github.com/openai/codex), [Pi](https://github.com/earendil-works/pi),
 and [Oh My Pi](https://github.com/can1357/oh-my-pi), across whatever terminals you
-use. When an agent finishes, asks a question, or blocks on a permission prompt,
-you get a glanceable toast (it shows over full-screen apps too), and a click
-takes you to that session's terminal.
+use.
+
+At rest the dot tucks against a screen edge and stays out of your way. When an
+agent finishes or blocks on a permission prompt, it stretches out into a line
+telling you which one, then tucks back. Click it and it opens into the full
+session list, in place. It draws over full-screen apps, so it reaches you
+wherever you are.
 
 It doesn't replace your harness or your terminal. It's a thin layer above them.
 Once you're running three or four agents at once, the hard part isn't the work,
 it's knowing which session is waiting. That's the problem Roundtable solves.
 
 > **Status:** early but usable. macOS 14+. It reads your agents' own transcripts,
-> so there's nothing to configure to get started. Per-display full-screen
+> so there's nothing to configure to get started. The menu-bar presentation still
+> exists in the code and works, it just isn't the one offered in Settings. Per-display full-screen
 > detection uses a private macOS API (details in [Privacy & caveats](#privacy--caveats)).
 
 ## Features
 
-- Every harness in one attention-sorted list, with real session names (your
+- **A floating orb, not a menu-bar item.** Drag it anywhere; it tucks against
+  the nearest edge and sits over full-screen apps. Alerts grow out of it right
+  where you're already looking.
+- **Every harness in one attention-sorted list**, with real session names (your
   renames, not random slugs).
-- Only shows what's actually running. A session appears when a matching live
+- **Answer without switching.** When an agent blocks on a permission prompt, the
+  row shows the exact command with Allow and Deny. Roundtable types the answer
+  into that terminal for you, and the terminal stays answerable too.
+- **Keyboard shortcuts for all of it.** Open the list, jump to whatever is
+  waiting, approve or deny, or go straight to the third session, without
+  touching the mouse. All rebindable in Settings.
+- **Peek before you switch.** Expand a session to read its recent activity in
+  place; most of the time that answers the question.
+- **Only shows what's actually running.** A session appears when a matching live
   process exists, matched to its transcript by working directory.
-- Alerts that don't interrupt you: a toast in the menu-bar item, or a floating
-  frosted-glass pill that shows over full-screen apps where the menu bar is
-  hidden. On the focused screen or every screen, with an optional sound.
-- Permission-prompt detection, the one thing reading transcripts can't do. A
-  single toggle in Settings installs each harness's native hook so Roundtable
-  knows the instant an agent is blocked waiting for your approval.
-- Click a session to jump to its terminal or project workspace.
+- **Permission-prompt detection**, the one thing reading transcripts can't do. A
+  single toggle in Settings installs each harness's native hook.
 
 ## Supported harnesses
 
@@ -59,7 +71,7 @@ Requires macOS 14+ and a Swift 6 toolchain (Xcode 16+).
 swift build                         # compile
 ./.build/debug/Roundtable --scan    # headless: print current sessions, then exit
 ./scripts/bundle.sh                 # assemble and ad-hoc-sign Roundtable.app
-open Roundtable.app                 # look for the grid icon in the menu bar
+open Roundtable.app                 # look for the dot tucked against a screen edge
 ```
 
 `--scan` is the quickest way to see the engine work against your live sessions
@@ -131,10 +143,28 @@ terminal lets you script:
 - `bundle.sh` ad-hoc-signs the app, so on first launch you may need to allow it
   in System Settings under Privacy & Security.
 
+## Shortcuts
+
+All global, all rebindable in Settings (click the shortcut, press the keys you
+want; Escape cancels, Delete clears). A combination another app already owns
+won't register.
+
+| Shortcut | Does |
+|---|---|
+| `⌘⌥R` | Open / close the session list |
+| `⌘⌥J` | Jump to the session that needs you |
+| `⌘⌥Y` | Approve the pending prompt |
+| `⌘⌥N` | Deny the pending prompt |
+| `⌘⌥O` | Show / hide the orb |
+| `⌘⌥1`–`⌘⌥9` | Jump straight to the Nth session |
+
+Approve and deny work with the list closed, which is the point: you never have
+to leave what you're doing.
+
 ## Roadmap
 
-- Exact-pane focus for muxy (over its socket) and cmux
-- Reply to a session from the menu bar
+- Exact-pane focus for cmux
+- Reply to a session inline, without switching to its terminal
 - Multi-monitor focus refinements
 
 ## Contributing

@@ -8,17 +8,17 @@ const sponsor = 'https://github.com/sponsors/krak7602';
 // Sorted the way the app sorts: the ones that need you float to the top,
 // working ones sink. Deliberately generic demo data, not anyone's real work.
 const sessions = [
-  { dot: '🔴', name: 'api-gateway', tag: 'codex', proj: 'infra', last: 'Approve running `terraform apply`?' },
-  { dot: '🟢', name: 'checkout-flow', tag: 'claude', proj: 'storefront', last: 'Done. 24 tests passing.' },
-  { dot: '🟡', name: 'search-index', tag: 'omp', proj: 'backend', last: 'Reindexing the catalog…' },
+  { state: 'needs', name: 'api-gateway', proj: 'infra', last: 'terraform apply -auto-approve' },
+  { state: 'ready', name: 'checkout-flow', proj: 'storefront', last: 'Done. 24 tests passing.' },
+  { state: 'busy', name: 'search-index', proj: 'backend', last: 'Reindexing the catalog…' },
 ];
 
 const features = [
-  { t: 'One list, always sorted', d: 'Every harness in a single menu, the ones that need you floated to the top, with real session names.', p: 'M4 6h16M4 12h16M4 18h10' },
-  { t: 'Alerts that do not interrupt', d: 'A quiet toast in the menu bar, or a floating pill that shows over full-screen apps where the menu bar is hidden.', p: 'M12 3a6 6 0 0 0-6 6c0 5-2 6-2 6h16s-2-1-2-6a6 6 0 0 0-6-6zM10.5 20a1.5 1.5 0 0 0 3 0' },
-  { t: 'It sees permission prompts', d: 'The one thing reading transcripts cannot do. One toggle installs each harness hook so you know the instant an agent is blocked.', p: 'M12 3l7 4v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V7l7-4zM9.5 12l1.8 1.8L15 10' },
-  { t: 'Click to jump there', d: 'Go straight to the session that needs you, the right terminal or project workspace comes to the front.', p: 'M5 12h13M13 6l6 6-6 6' },
-  { t: 'Only what is running', d: 'A session shows up when a live process actually exists, matched to its transcript by working directory. No stale noise.', p: 'M12 12m-9 0a9 9 0 1 0 18 0a9 9 0 1 0-18 0M12 8v4l3 2' },
+  { t: 'It sits where you work', d: 'A small glass dot you drop anywhere on screen. It tucks against the nearest edge and waits there, over full-screen apps too.', p: 'M12 12m-8 0a8 8 0 1 0 16 0a8 8 0 1 0-16 0M12 3v2M12 19v2M3 12h2M19 12h2' },
+  { t: 'Alerts grow out of the dot', d: 'When a session needs you the dot stretches into a line telling you which one, right where your eyes already are, then tucks back.', p: 'M4 12h10M14 8l4 4-4 4M18 5v14' },
+  { t: 'Answer without leaving', d: 'A blocked agent shows the exact command and an Allow or Deny. Roundtable types the answer into that terminal, so you never switch.', p: 'M4 12l5 5L20 6' },
+  { t: 'All on the keyboard', d: 'Open the list, jump to whatever is waiting, approve or deny, or go straight to the third session, without touching the mouse.', p: 'M3 7h18v10H3zM7 11h.01M11 11h.01M15 11h.01M8 15h8' },
+  { t: 'Peek before you switch', d: 'Expand any session to read its recent activity in place. Most of the time that answers the question and you carry on.', p: 'M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z' },
   { t: 'Zero config to start', d: 'It reads your agents own files. Nothing to set up before it works. Enhanced detection is opt-in when you want it.', p: 'M12 3v3M12 18v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M3 12h3M18 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1' },
 ];
 
@@ -47,11 +47,12 @@ const harnesses = ['Claude Code', 'Codex', 'Pi', 'Oh My Pi'];
     <div class="glow"></div>
     <div class="wrap hero-grid">
       <div>
-        <span class="eyebrow">macOS menu bar · reads your agents' own files</span>
-        <h1>Every AI coding session, <span class="amber">one glance.</span></h1>
+        <span class="eyebrow">macOS only · reads your agents' own files</span>
+        <h1>Every AI coding session, <span class="amber">one glance away.</span></h1>
         <p class="sub">
-          You run three agents at once. Roundtable watches them all and tells you
-          the moment one finishes, asks a question, or needs your approval.
+          At some point, every agent stops and waits on you. Roundtable tells you
+          the moment that happens, and lets you answer without leaving what
+          you're doing.
         </p>
         <div class="hero-cta">
           <a class="btn btn-primary" href={download}>
@@ -65,15 +66,14 @@ const harnesses = ['Claude Code', 'Codex', 'Pi', 'Oh My Pi'];
 
       <!-- the app, in action, on a macOS screen -->
       <div class="mock">
-        <div class="screen">
+        <div class="screen orb-scene" id="scene">
           <div class="os-bar">
             <div class="notch"></div>
             <div class="left">
-              <span class="app">Terminal</span>
+              <span class="app">Draft</span>
               <span>File</span><span>Edit</span><span>View</span><span>Window</span><span>Help</span>
             </div>
             <div class="right">
-              <span class="rt"><span class="dots"><i></i><i></i><i></i><i></i></span><span class="badge">2</span></span>
               <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="2.4" height="4" rx="1"/><rect x="4" y="5" width="2.4" height="6" rx="1"/><rect x="8" y="3" width="2.4" height="8" rx="1"/><rect x="12" y="1" width="2.4" height="10" rx="1"/></svg>
               <svg width="15" height="12" viewBox="0 0 15 12" fill="currentColor"><path d="M7.5 2C4.7 2 2.3 3.1 0.6 4.9l1.4 1.4C3.4 4.9 5.4 4 7.5 4s4.1 0.9 5.5 2.3l1.4-1.4C12.7 3.1 10.3 2 7.5 2zM7.5 6c-1.4 0-2.6 0.5-3.5 1.4l1.4 1.4c0.6-0.5 1.3-0.8 2.1-0.8s1.5 0.3 2.1 0.8l1.4-1.4C10.1 6.5 8.9 6 7.5 6zM7.5 9.4L6 10.9c0.4 0.4 0.9 0.6 1.5 0.6s1.1-0.2 1.5-0.6L7.5 9.4z"/></svg>
               <svg width="24" height="12" viewBox="0 0 24 12" fill="none" stroke="currentColor" stroke-width="1"><rect x="0.5" y="1.5" width="20" height="9" rx="2.5"/><rect x="2" y="3" width="13" height="6" rx="1" fill="currentColor" stroke="none"/><path d="M22.2 4.2v3.6" stroke-width="1.6" stroke-linecap="round"/></svg>
@@ -81,34 +81,74 @@ const harnesses = ['Claude Code', 'Codex', 'Pi', 'Oh My Pi'];
             </div>
           </div>
 
-          <!-- the terminal this all sits over: the agent that's blocked -->
+          <!-- What you're actually doing. Deliberately not the terminal: the
+               point is that the agent is somewhere you aren't looking, and
+               Roundtable comes to you. All text here is invented. -->
           <div class="os-win">
-            <div class="win-bar"><span class="tl r"></span><span class="tl y"></span><span class="tl g"></span><span class="win-t">api-gateway — codex</span></div>
+            <div class="win-bar">
+              <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+              <span class="win-t">saturday.md</span>
+            </div>
             <div class="win-body">
-              <p><span class="pfx">›</span> add a rate limiter to the gateway</p>
-              <p class="dim">edited middleware/ratelimit.go</p>
-              <p class="dim">edited gateway/config.go</p>
-              <p class="dim">running the plan against staging</p>
-              <p class="ask">Approve running <span class="cmd">terraform apply</span>? <span class="cur"></span></p>
+              <h4>Saturday</h4>
+              <p>Bread order before ten. They sell out by eleven and I am not doing
+                that again.</p>
+              <ul>
+                <li>coffee, the dark one</li>
+                <li>olives</li>
+                <li>two lemons</li>
+                <li>something green</li>
+              </ul>
+              <p>Call mum back. Ask about the ladder.<span class="caret"></span></p>
             </div>
           </div>
 
-          <div class="os-toast"><span class="tdot"></span> api-gateway — needs permission</div>
-
-          <span class="os-caret"></span>
-          <div class="os-menu">
-            <div class="head"><span class="t">Roundtable</span><span class="n">2 waiting</span></div>
-            {sessions.map((s) => (
-              <div class="os-row">
-                <span class="st">{s.dot}</span>
-                <div class="body">
-                  <div class="top"><span class="name">{s.name}</span><span class="tag">{s.tag}</span><span class="proj">{s.proj}</span></div>
-                  <div class="last">{s.last}</div>
+          <!-- Roundtable: one element, moving through its states on a timeline -->
+          <!-- opens on the list so the hero still shows the product before the
+               timeline starts, or if scripts never run at all -->
+          <div class="orb" id="orb" data-state="list">
+            <div class="orb-inner">
+              <!-- text first, mark last: the shell grows leftward out of the dot,
+                   so the mark has to stay put at the right end rather than jump
+                   across as the pill opens -->
+              <div class="pill-face">
+                <span class="pill-text">api-gateway — needs permission</span>
+                <span class="pmark"><i></i><i></i><i></i><i></i></span>
+              </div>
+              <div class="list-face">
+                {sessions.map((s) => (
+                  <>
+                    <div class={`orb-row ${s.state}`} data-row={s.name}>
+                      <span class="st"><i></i><i></i><i></i><i></i></span>
+                      <div class="body">
+                        <div class="top"><span class="name">{s.name}</span><span class="proj">{s.proj}</span></div>
+                        <div class="last">{s.last}</div>
+                      </div>
+                      <span class="chev">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+                      </span>
+                    </div>
+                    {s.state === 'needs' && (
+                      <div class="orb-actions"><span class="btn-allow">Allow</span><span class="btn-plain">Deny</span><span class="btn-plain jump">Jump</span></div>
+                    )}
+                  </>
+                ))}
+                <div class="peek">
+                  <p>❯ why is checkout slow on mobile?</p>
+                  <p>→ read src/checkout/cart.tsx</p>
+                  <p>Bundle was importing the whole icon set.</p>
+                  <p>→ npm run test</p>
+                </div>
+                <div class="orb-foot">
+                  <span class="tools"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.1 14.4a1.5 1.5 0 00.3 1.65l.05.06a1.8 1.8 0 11-2.55 2.55l-.06-.06a1.5 1.5 0 00-1.65-.3 1.5 1.5 0 00-.9 1.37v.16a1.8 1.8 0 01-3.6 0v-.09a1.5 1.5 0 00-.98-1.37 1.5 1.5 0 00-1.65.3l-.06.06a1.8 1.8 0 11-2.55-2.55l.06-.06a1.5 1.5 0 00.3-1.65 1.5 1.5 0 00-1.37-.9h-.16a1.8 1.8 0 010-3.6h.09a1.5 1.5 0 001.37-.98 1.5 1.5 0 00-.3-1.65l-.06-.06A1.8 1.8 0 016.4 4.84l.06.06a1.5 1.5 0 001.65.3h.07a1.5 1.5 0 00.9-1.37v-.16a1.8 1.8 0 013.6 0v.09a1.5 1.5 0 00.9 1.37 1.5 1.5 0 001.65-.3l.06-.06a1.8 1.8 0 112.55 2.55l-.06.06a1.5 1.5 0 00-.3 1.65v.07a1.5 1.5 0 001.37.9h.16a1.8 1.8 0 010 3.6h-.09a1.5 1.5 0 00-1.37.9z"/></svg><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 3v9M6.5 7.5a8 8 0 1 0 11 0"/></svg></span>
+                  <span class="count"><b id="count">1</b> waiting</span>
+                  <span class="mark"><i></i><i></i><i></i><i></i></span>
                 </div>
               </div>
-            ))}
-            <div class="os-foot"><a>Settings…</a><a>Quit</a></div>
+            </div>
           </div>
+
+          <span class="cursor" id="cursor"></span>
         </div>
       </div>
     </div>
@@ -130,7 +170,7 @@ const harnesses = ['Claude Code', 'Codex', 'Pi', 'Oh My Pi'];
   <section id="features">
     <div class="wrap section">
       <h2>Built to keep you out of the tab-hunt.</h2>
-      <p class="lead">It sits above your harness and your terminal. It doesn't replace either one.</p>
+      <p class="lead">It sits above your harness and your terminal, in the corner of the screen you're already looking at. It doesn't replace either one.</p>
       <div class="features">
         {features.map((f) => (
           <div class="card">
@@ -154,8 +194,9 @@ const harnesses = ['Claude Code', 'Codex', 'Pi', 'Oh My Pi'];
         {harnesses.map((h) => (<span class="chip"><span class="g"></span>{h}</span>))}
       </div>
       <p class="lead" style="margin-top:22px">
-        Click-to-focus supports iTerm2, tmux, muxy, Ghostty, and more, landing as precisely as
-        each terminal allows.
+        Jumping and answering support iTerm2, tmux, and muxy, landing as precisely as each
+        terminal allows. Everywhere else you still get the alert, the command, and one click
+        to the right window.
       </p>
     </div>
   </section>
@@ -210,4 +251,166 @@ const harnesses = ['Claude Code', 'Codex', 'Pi', 'Oh My Pi'];
       </div>
     </div>
   </footer>
+
+<script>
+  // Plays the same flow the app does: a session calls, you open the list,
+  // approve it, and look in on another one. Driven by data-state on a single
+  // element so the visual never shows two states at once.
+  const scene = document.getElementById('scene');
+  const orb = document.getElementById('orb');
+  const cursor = document.getElementById('cursor');
+  const count = document.getElementById('count');
+
+  if (scene && orb && cursor) {
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const listFace = orb.querySelector('.list-face');
+
+    // Measure what the list actually needs, in each state, instead of hard-coding
+    // a height per breakpoint — the scene is fluid, so the numbers have to be too.
+    function fit() {
+      if (!listFace) return;
+      const was = orb.dataset.state;
+      orb.classList.add('measuring');
+      // The pill has to fit its message: a fixed width leaves dead space on one
+      // side and clips the text on the other.
+      const face = orb.querySelector('.pill-face');
+      const text = orb.querySelector('.pill-text');
+      const pmark = orb.querySelector('.pill-face .pmark');
+      if (face && text && pmark) {
+        orb.dataset.state = 'pill';
+        const prev = text.style.maxWidth;
+        text.style.maxWidth = 'none';
+        const cs = getComputedStyle(face);
+        const chrome = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + parseFloat(cs.columnGap || 0);
+        orb.style.setProperty('--w-text', Math.ceil(text.scrollWidth) + 'px');
+        orb.style.setProperty('--w-pill', Math.ceil(text.scrollWidth + pmark.offsetWidth + chrome) + 'px');
+        text.style.maxWidth = prev;
+      }
+      orb.dataset.state = was;
+      // Force a reflow before animations are allowed back, so the measuring
+      // pass can never be seen.
+      void orb.offsetWidth;
+      orb.classList.remove('measuring');
+    }
+    fit();
+    if (document.fonts?.ready) document.fonts.ready.then(fit);   // metrics shift once fonts land
+    let resizeTimer;
+    window.addEventListener('resize', () => {
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(fit, 150);
+    });
+
+    // Move the pointer to an element's centre, in the scene's own coordinates.
+    const moveTo = (el, dx = 0, dy = 0) => {
+      const a = scene.getBoundingClientRect();
+      const b = el.getBoundingClientRect();
+      cursor.style.transform =
+        `translate(${b.left - a.left + b.width / 2 + dx}px, ${b.top - a.top + b.height / 2 + dy}px)`;
+    };
+
+    const click = async () => {
+      cursor.classList.add('click');
+      await wait(150);
+      cursor.classList.remove('click');
+    };
+
+    async function play() {
+      // rest
+      orb.dataset.state = 'rest';
+      orb.classList.remove('resolved', 'calling');
+      if (count) count.textContent = '1';
+      cursor.classList.remove('on');
+      await wait(1400);
+
+      // a session calls: the dot stretches into a line
+      orb.classList.add('calling');
+      orb.dataset.state = 'pill';
+      await wait(1900);
+
+      // you go over and click it
+      cursor.classList.add('on');
+      moveTo(orb.querySelector('.pill-face'));
+      await wait(800);
+      await click();
+
+      // it opens into the list
+      orb.dataset.state = 'list';
+      await wait(1500);
+
+      // approve the blocked one
+      const allow = orb.querySelector('.btn-allow');
+      moveTo(allow);
+      await wait(750);
+      orb.classList.add('pressing');
+      await click();
+      orb.classList.remove('pressing');
+
+      // the terminal carries on; nothing is waiting any more
+      orb.classList.add('resolved');
+      if (count) count.textContent = '0';
+      // The buttons are gone, so the list needs less room. Without this the
+      // shell keeps its old height and leaves a gap above the rows.
+      await wait(1600);
+
+      // close it back into the dot
+      moveTo(scene, -140, 60);
+      await wait(600);
+      await click();
+      orb.dataset.state = 'rest';
+      orb.classList.remove('calling');
+      cursor.classList.remove('on');
+      await wait(1200);
+
+      // later: look in on another session without switching to it
+      cursor.classList.add('on');
+      moveTo(orb.querySelector('.pill-face'));
+      await wait(700);
+      await click();
+      orb.dataset.state = 'list';
+      await wait(900);
+
+      const row = orb.querySelector('.orb-row.ready');
+      moveTo(row, 120, 0);
+      await wait(400);
+      row.classList.add('probing');     // content recedes, chevron comes forward
+      await wait(400);
+      await click();
+      row.classList.remove('probing');
+      row.classList.add('peeked');      // this row takes over the list
+      orb.dataset.state = 'peek';
+      await wait(2200);
+
+      // collapse the peek: the rows come back first, then the list closes.
+      // `peeked` has to come off *after* the state leaves peek, or the
+      // :not(.peeked) rule hides every row and leaves the activity on its own.
+      moveTo(row, 120, 0);
+      await wait(500);
+      await click();
+      orb.dataset.state = 'list';
+      row.classList.remove('peeked');
+      await wait(1100);
+
+      // and put it away
+      moveTo(scene, -140, 60);
+      await wait(550);
+      await click();
+      orb.dataset.state = 'rest';
+      cursor.classList.remove('on');
+      await wait(1500);
+    }
+
+    async function loop() {
+      // Static, honest end state for anyone who asked for less motion.
+      if (reduce.matches) { orb.dataset.state = 'list'; return; }
+      for (;;) await play();
+    }
+
+    // Only animate while it's actually on screen.
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) { io.disconnect(); loop(); }
+    }, { threshold: 0.25 });
+    io.observe(scene);
+  }
+</script>
 </Base>

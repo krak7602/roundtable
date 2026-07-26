@@ -251,17 +251,4 @@ private struct GlassPill: ViewModifier {
     }
 }
 
-private struct VisualEffectBackground: NSViewRepresentable {
-    let material: NSVisualEffectView.Material
-
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let v = NSVisualEffectView()
-        v.material = material
-        v.blendingMode = .behindWindow
-        v.state = .active
-        v.isEmphasized = true
-        return v
-    }
-
-    func updateNSView(_ v: NSVisualEffectView, context: Context) { v.material = material }
-}
+// VisualEffectBackground now lives in Theme.swift — the orb needs it too.

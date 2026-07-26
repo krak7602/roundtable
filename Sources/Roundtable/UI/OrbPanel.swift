@@ -1,0 +1,665 @@
+import AppKit
+import SwiftUI
+import Combine
+
+/// The floating orb: a draggable glass dot that lives on the desktop instead of
+/// in the menu bar. It rests dim and half-tucked against a screen edge, comes
+/// forward on hover, grows sideways into a pill when a session needs you, and
+/// opens into the full session list in place. Alternative to MenuBarController,
+/// chosen in Settings.
+///
+/// It accepts mouse events (drag, click) while still drawing over another app's
+/// full-screen space — verified on-device, and the thing the whole design rests
+/// on. One fixed-size panel holds every state: the dot sits in the bottom corner
+/// on its own side and the list grows upward out of it, so the orb *becomes* the
+/// panel rather than spawning a detached popover that points back at itself.
+/// Fixed size also keeps us clear of the re-entrant AppKit crashes that resizing
+/// a hosting view caused in the toast panel.
+@MainActor
+final class OrbController {
+    private let store: SessionStore
+    private let panel: NSPanel
+    private let model = OrbModel()
+    private let drag = OrbDragView()
+    private var cancellables: Set<AnyCancellable> = []
+    private var collapseTimer: Timer?
+    private var moveTimer: Timer?
+    private var outsideClickMonitor: Any?
+    /// Where to put the panel back after it stepped down to fit the list.
+    private var restoreY: CGFloat?
+
+    private let panelSize = NSSize(width: 372, height: 560)
+    private let dotSize: CGFloat = 34
+    /// Distance from the panel's bottom/side edges to the dot's own edge. Must
+    /// match the padding in OrbView so the dot lands where the view draws it.
+    private let dotInset: CGFloat = 6
+
+    /// Opening Settings is the app's job, not the orb's.
+    var onSettings: (() -> Void)?
+    /// How long an attention pill stays out before it tucks back.
+    private let pillDuration: TimeInterval = 4.5
+
+    init(store: SessionStore) {
+        self.store = store
+        panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: panelSize),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered, defer: true)
+        panel.isFloatingPanel = true
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.level = .screenSaver
+        panel.hidesOnDeactivate = false
+        panel.ignoresMouseEvents = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        // Pin to dark: the orb floats over whatever the user is doing, so its
+        // material must not follow the system theme (light mode would render the
+        // list's text dark on a dark HUD) and SwiftUI's semantic colours inside
+        // it need to resolve for a dark surface.
+        panel.appearance = NSAppearance(named: .darkAqua)
+
+        let host = FirstMouseHostingView(rootView: OrbView(model: model, store: store, onSettings: { [weak self] in
+            self?.closeList()
+            self?.onSettings?()
+        }))
+        host.frame = NSRect(origin: .zero, size: panelSize)
+        host.autoresizingMask = [.width, .height]
+        drag.frame = NSRect(origin: .zero, size: panelSize)
+        drag.addSubview(host)
+        panel.contentView = drag
+
+        drag.onHover = { [weak self] inside in
+            self?.model.hovering = inside
+            if inside { self?.model.pulsing = false }   // seen it; stop nagging
+        }
+        drag.onClick = { [weak self] in self?.toggleList() }
+        drag.onDragEnded = { [weak self] in self?.snapToEdge(animated: true) }
+
+        // Grow the pill when something new needs you.
+        store.$sessions
+            .receive(on: RunLoop.main)
+            .sink { [weak self] sessions in self?.apply(sessions) }
+            .store(in: &cancellables)
+
+        // Keep the clickable area in step with what's actually drawn.
+        model.$pillWidth
+            .combineLatest(model.$expanded, model.$edge, model.$listOpen)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _, _, _, _ in self?.updateHitArea() }
+            .store(in: &cancellables)
+        model.$listSize
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.updateHitArea() }
+            .store(in: &cancellables)
+    }
+
+    func show() {
+        restorePosition()
+        panel.orderFrontRegardless()
+    }
+
+    func hide() {
+        closeList()
+        panel.orderOut(nil)
+    }
+
+    var isVisible: Bool { panel.isVisible }
+    var isListOpen: Bool { model.listOpen }
+
+    // MARK: - The list
+
+    /// The orb opens into the list in place. The dot settles into the footer
+    /// corner on its own side, so it reads as the same object unfolding.
+    func toggleList() {
+        guard panel.isVisible else { return }
+        model.pulsing = false
+        model.listOpen ? closeList() : openList()
+    }
+
+    private func openList() {
+        model.expanded = false          // a pill and the list shouldn't overlap
+        model.listOpen = true
+        keepListOnScreen()
+        watchForOutsideClick()
+    }
+
+    private func closeList() {
+        guard model.listOpen else { return }
+        model.listOpen = false
+        stopWatchingOutsideClick()
+        if let y = restoreY {
+            restoreY = nil
+            glide(to: NSPoint(x: panel.frame.origin.x, y: y), save: false)
+        }
+    }
+
+    /// The list grows upward from the dot, so an orb parked near the top of the
+    /// screen would run off it. Step the panel down just enough to fit, and
+    /// remember where it was so closing puts it back.
+    private func keepListOnScreen() {
+        guard let screen = screenFor(panel.frame.origin) else { return }
+        let overflow = panel.frame.maxY - screen.visibleFrame.maxY
+        guard overflow > 0 else { return }
+        restoreY = panel.frame.origin.y
+        glide(to: NSPoint(x: panel.frame.origin.x, y: panel.frame.origin.y - overflow), save: false)
+    }
+
+    /// Click anywhere else and the list closes, the way a menu would. The panel
+    /// is click-through outside its content, so the click itself still lands on
+    /// whatever is underneath.
+    private func watchForOutsideClick() {
+        stopWatchingOutsideClick()
+        outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let p = NSEvent.mouseLocation
+                guard !self.listContains(p) else { return }
+                self.closeList()
+            }
+        }
+    }
+
+    /// A global monitor is meant to skip our own clicks, but this panel is
+    /// non-activating inside an accessory app: clicking it never makes us the
+    /// active app, so the monitor sees those clicks too. Without this check,
+    /// every click *inside* the list read as a click away from it — collapsing
+    /// the whole orb when you were only toggling a row.
+    private func listContains(_ point: NSPoint) -> Bool {
+        guard model.listOpen, !drag.listRect.isEmpty else { return false }
+        let onScreen = NSRect(x: panel.frame.minX + drag.listRect.minX,
+                              y: panel.frame.minY + drag.listRect.minY,
+                              width: drag.listRect.width,
+                              height: drag.listRect.height)
+        return onScreen.contains(point)
+    }
+
+    private func stopWatchingOutsideClick() {
+        if let monitor = outsideClickMonitor { NSEvent.removeMonitor(monitor) }
+        outsideClickMonitor = nil
+    }
+
+    // MARK: - Attention
+
+    private var lastAttentionKey = ""
+
+    private func apply(_ sessions: [Session]) {
+        let waiting = sessions.filter(\.needsAttention)
+        model.attention = waiting.count
+
+        // Only grow on a *new* call for attention, not on every poll.
+        guard let top = waiting.first else {
+            lastAttentionKey = ""
+            model.pulsing = false
+            return
+        }
+        let key = "\(top.id)|\(top.state.rawValue)"
+        guard key != lastAttentionKey else { return }
+        lastAttentionKey = key
+        guard !model.listOpen else { return }   // already looking at it
+        let name = top.name.count > 26 ? top.name.prefix(26) + "…" : top.name[...]
+        expand(message: "\(name) — \(top.state.label)")
+        playSound(for: top.state)
+    }
+
+    /// The orb owns its own alert sound: in orb mode the menu-bar toast path is
+    /// switched off, and the sound used to live there.
+    private func playSound(for state: SessionState) {
+        guard AppSettings.shared.soundEnabled else { return }
+        let name = (state == .waitingPermission || state == .error)
+            ? AppSettings.shared.permissionSound
+            : AppSettings.shared.waitingSound
+        NSSound(named: name)?.play()
+    }
+
+    /// Grow out of the dot into a pill, then tuck back on a timer. The pulse is
+    /// for *news*: it stops when the pill tucks back (or the moment the user
+    /// looks at the orb), leaving a steady amber mark to say something is still
+    /// waiting. Blinking until the user acts would just be nagging.
+    private func expand(message: String, sticky: Bool = false) {
+        model.message = message
+        model.expanded = true
+        model.pulsing = true
+        collapseTimer?.invalidate()
+        guard !sticky else { return }
+        collapseTimer = Timer.scheduledTimer(withTimeInterval: pillDuration, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.model.expanded = false
+                self?.model.pulsing = false
+            }
+        }
+    }
+
+    /// Only what's actually drawn takes clicks; everything else in the panel
+    /// stays click-through so the app underneath keeps working.
+    private func updateHitArea() {
+        if model.listOpen, model.listSize.width > 1 {
+            let size = model.listSize
+            let x = model.edge == .right ? panelSize.width - size.width - dotInset : dotInset
+            drag.listRect = NSRect(x: x, y: dotInset, width: size.width, height: size.height)
+            drag.hitRect = .zero
+        } else {
+            drag.listRect = .zero
+            let width = model.expanded ? max(model.pillWidth, dotSize) : dotSize
+            let x = model.edge == .right ? panelSize.width - width - dotInset : dotInset
+            drag.hitRect = NSRect(x: x, y: dotInset, width: width, height: dotSize)
+        }
+    }
+
+    // MARK: - Position
+    //
+    // The panel is much taller than the dot (it has to hold the list), and the
+    // dot lives in the bottom corner. So everything positional is expressed in
+    // terms of where the *dot* ends up, not the panel.
+
+    private var dotCenterX: CGFloat {
+        model.edge == .right ? panel.frame.maxX - dotInset - dotSize / 2
+                             : panel.frame.minX + dotInset + dotSize / 2
+    }
+
+    private func restorePosition() {
+        let d = UserDefaults.standard
+        // Keys are versioned: the panel's geometry changed when the dot moved to
+        // the bottom corner, so an old saved origin would land somewhere odd.
+        if let x = d.object(forKey: "orbX2") as? Double, let y = d.object(forKey: "orbY2") as? Double {
+            panel.setFrameOrigin(NSPoint(x: x, y: y))
+        } else if let screen = NSScreen.main {
+            let f = screen.visibleFrame
+            panel.setFrameOrigin(NSPoint(x: f.maxX - panelSize.width, y: f.midY - panelSize.height / 2))
+        }
+        snapToEdge(animated: false)
+    }
+
+    private func savePosition() {
+        let o = panel.frame.origin
+        UserDefaults.standard.set(Double(o.x), forKey: "orbX2")
+        UserDefaults.standard.set(Double(o.y), forKey: "orbY2")
+    }
+
+    /// Drop it and it plops back against whichever side of the screen it's on,
+    /// so the dot stops floating in the middle of the user's work.
+    private func snapToEdge(animated: Bool) {
+        guard let screen = screenFor(panel.frame.origin) else { return }
+        let f = screen.visibleFrame
+        let toLeft = dotCenterX < f.midX
+        let newEdge: OrbEdge = toLeft ? .left : .right
+
+        // Changing sides moves the dot to the other end of the panel. Shift the
+        // panel by the same distance first, so the dot doesn't visibly jump the
+        // width of the panel before the snap animation even starts.
+        if newEdge != model.edge {
+            let shift = panelSize.width - dotSize - 2 * dotInset
+            var origin = panel.frame.origin
+            origin.x += (newEdge == .left) ? shift : -shift
+            panel.setFrameOrigin(origin)
+            model.edge = newEdge
+        }
+
+        let x = toLeft ? f.minX : f.maxX - panelSize.width
+        // Clamp on the dot, not the panel: the panel towers above the dot and
+        // forcing all of it on screen would drag the orb down to the bottom.
+        let minY = f.minY - dotInset
+        let maxY = f.maxY - dotInset - dotSize
+        let y = min(max(panel.frame.origin.y, minY), maxY)
+        let target = NSPoint(x: x, y: y)
+
+        if animated {
+            glide(to: target)
+        } else {
+            panel.setFrameOrigin(target)
+            savePosition()
+        }
+    }
+
+    /// Move the panel over time by stepping the frame ourselves.
+    ///
+    /// `panel.animator().setFrameOrigin(_:)` silently does nothing for this
+    /// window (borderless, non-activating, screen-saver level) — verified: the
+    /// same target applied instantly via `setFrameOrigin` moves it, while the
+    /// animator leaves it untouched.
+    private func glide(to target: NSPoint, save: Bool = true) {
+        moveTimer?.invalidate()
+        let start = panel.frame.origin
+        guard hypot(target.x - start.x, target.y - start.y) > 0.5 else {
+            panel.setFrameOrigin(target)
+            if save { savePosition() }
+            return
+        }
+        let steps = 15
+        var step = 0
+        moveTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                step += 1
+                let p = min(1.0, Double(step) / Double(steps))
+                let eased = 1 - pow(1 - p, 3)          // easeOutCubic
+                self.panel.setFrameOrigin(NSPoint(
+                    x: start.x + (target.x - start.x) * eased,
+                    y: start.y + (target.y - start.y) * eased))
+                if p >= 1 {
+                    self.moveTimer?.invalidate()
+                    if save { self.savePosition() }
+                }
+            }
+        }
+    }
+
+    private func screenFor(_ point: NSPoint) -> NSScreen? {
+        NSScreen.screens.first { $0.frame.contains(NSPoint(x: point.x + panelSize.width / 2,
+                                                           y: point.y + dotInset + dotSize / 2)) }
+            ?? NSScreen.main
+    }
+
+    deinit { }
+}
+
+/// SwiftUI in a panel that never becomes key.
+///
+/// This panel is borderless and non-activating, so it is never the key window
+/// and every click into it counts as a "first mouse" click. `NSHostingView`
+/// declines those by default, so taps never reached SwiftUI at all: hover worked
+/// (tracking areas don't need key status), but buttons and tap gestures were
+/// dead, and the clicks fell through to the drag view underneath instead.
+final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    required init(rootView: Content) { super.init(rootView: rootView) }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError("not used") }
+}
+
+// MARK: - Drag / hit handling
+
+/// Accepts hits only where the orb is actually drawn, so the rest of the panel
+/// stays click-through and never takes a click from the app underneath. The dot
+/// is ours (drag and click); the list is SwiftUI's, so hits there are passed to
+/// the hosting view instead of swallowed here.
+final class OrbDragView: NSView {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    var onClick: (() -> Void)?
+    var onHover: ((Bool) -> Void)?
+    var onDragEnded: (() -> Void)?
+
+    /// The dot/pill, in panel coordinates. Handled by this view.
+    var hitRect: NSRect = .zero { didSet { if hitRect != oldValue { updateTrackingAreas() } } }
+    /// The open list, in panel coordinates. Handed to SwiftUI.
+    var listRect: NSRect = .zero
+
+    /// True while a click that belongs to the list is in flight. SwiftUI doesn't
+    /// consume clicks it handles, so AppKit walks them up the responder chain to
+    /// this view — without this, every click in the list also read as a click on
+    /// the orb and collapsed the whole thing.
+    private var ignoringClick = false
+    private var grabOffset: NSPoint?
+    /// Where the window started, so movement is measured across the whole
+    /// gesture. Comparing against the window's *current* origin never works: the
+    /// window is moved to follow the mouse on every event, so each step's
+    /// difference is ~0 and a slow drag would read as a click.
+    private var startOrigin: NSPoint?
+    private var didMove = false
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if !listRect.isEmpty, listRect.contains(point) { return super.hitTest(point) }
+        return hitRect.insetBy(dx: -2, dy: -2).contains(point) ? self : nil
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if !listRect.isEmpty, listRect.contains(event.locationInWindow) {
+            ignoringClick = true       // the list's click, not the orb's
+            return
+        }
+        ignoringClick = false
+        guard let window else { return }
+        let mouse = NSEvent.mouseLocation
+        grabOffset = NSPoint(x: mouse.x - window.frame.origin.x, y: mouse.y - window.frame.origin.y)
+        startOrigin = window.frame.origin
+        didMove = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard !ignoringClick, let window, let offset = grabOffset else { return }
+        let mouse = NSEvent.mouseLocation
+        let origin = NSPoint(x: mouse.x - offset.x, y: mouse.y - offset.y)
+        if let start = startOrigin, hypot(origin.x - start.x, origin.y - start.y) > 3 {
+            didMove = true
+        }
+        window.setFrameOrigin(origin)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer { ignoringClick = false }
+        guard !ignoringClick else { return }
+        grabOffset = nil
+        startOrigin = nil
+        didMove ? onDragEnded?() : onClick?()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas { removeTrackingArea(area) }
+        guard !hitRect.isEmpty else { return }
+        addTrackingArea(NSTrackingArea(
+            rect: hitRect.insetBy(dx: -6, dy: -6),
+            options: [.mouseEnteredAndExited, .activeAlways],
+            owner: self, userInfo: nil))
+    }
+
+    override func mouseEntered(with event: NSEvent) { onHover?(true) }
+    override func mouseExited(with event: NSEvent) { onHover?(false) }
+}
+
+// MARK: - View
+
+enum OrbEdge { case left, right }
+
+@MainActor
+final class OrbModel: ObservableObject {
+    @Published var hovering = false
+    @Published var attention = 0
+    @Published var edge: OrbEdge = .right
+    @Published var expanded = false          // the attention pill
+    @Published var listOpen = false          // the full session list
+    /// Blinking is reserved for news. Steady amber means "still waiting".
+    @Published var pulsing = false
+    @Published var message = ""
+    /// Measured sizes of what's drawn, so the clickable area can match.
+    @Published var pillWidth: CGFloat = 34
+    @Published var listSize: CGSize = .zero
+}
+
+/// Everything the orb can be, in one panel: the dot, the pill it grows into
+/// when something needs you, and the full list it opens into. All anchored to
+/// the bottom corner on the orb's own side, so each state unfolds from the last.
+struct OrbView: View {
+    @ObservedObject var model: OrbModel
+    @ObservedObject var store: SessionStore
+    var onSettings: () -> Void
+
+    @State private var wasListOpen = false
+    /// Ties the orb's dot to the footer's mark: one view, two positions.
+    @Namespace private var markNS
+
+    private var needsYou: Bool { model.attention > 0 }
+    private var resting: Bool { !model.hovering && !model.expanded && !model.listOpen }
+    private var onRight: Bool { model.edge == .right }
+    private var corner: Alignment { onRight ? .bottomTrailing : .bottomLeading }
+
+    /// How far the dot hides past the screen edge at rest. Bounded by the ring
+    /// of empty space around the mark inside the circle (a 15pt mark in a 34pt
+    /// dot leaves ~9.5pt each side): tuck deeper and the screen edge slices
+    /// through the outer column of dots, which reads as broken, not tucked.
+    private let tuck: CGFloat = 11.5
+
+    var body: some View {
+        ZStack(alignment: corner) {
+            Color.clear
+            shell
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: corner)
+        .padding(6)
+    }
+
+    /// One piece of glass for every state. The shell itself never gets replaced:
+    /// it grows from dot to pill to list, with its corner radius easing from a
+    /// capsule to a panel, and only the *contents* crossfade inside it. Swapping
+    /// whole views instead (the obvious way) reads as the orb being replaced by
+    /// something else, rather than the orb opening up.
+    private var shell: some View {
+        // The ZStack is the shell, and it is always present — that stable
+        // identity is the whole point. Hanging these modifiers off the `if/else`
+        // instead makes the container itself change identity when the state
+        // flips, so SwiftUI rebuilds it rather than resizing it: no from-value,
+        // no interpolation, and what you see is one view replaced by another.
+        ZStack(alignment: corner) {
+            Color.clear
+            inner.fixedSize()                               // keep natural size…
+        }
+            .frame(width: size.width, height: size.height, alignment: corner)
+            // Glass alone is not enough: over a bright backdrop the material
+            // washes out and white text stops being readable. The scrim gives a
+            // floor of contrast while still letting the blur show through.
+            .background {
+                ZStack {
+                    VisualEffectBackground(material: .hudWindow)
+                    Color.black.opacity(0.34)
+                }
+            }
+            .overlay(shape.fill(RTColor.attention.opacity(!model.listOpen && needsYou ? 0.16 : 0)))
+            .clipShape(shape)                               // …and reveal it as the shell grows
+            .overlay(shape.strokeBorder(.white.opacity(0.16), lineWidth: 0.5))
+            .shadow(color: .black.opacity(model.listOpen ? 0.45 : 0.4),
+                    radius: model.listOpen ? 22 : 10, y: model.listOpen ? 8 : 4)
+            // Half-tucked past the edge at rest; pulls fully into view otherwise.
+            .offset(x: resting ? (onRight ? tuck : -tuck) : 0)
+            .opacity(resting ? (needsYou ? 0.78 : 0.5) : 1)
+            .animation(sizeAnimation, value: size)
+            .animation(.spring(response: 0.34, dampingFraction: 0.78), value: resting)
+            .onChange(of: model.listOpen) { _, open in
+                // Keep the slower curve for the closing animation too.
+                wasListOpen = true
+                if !open {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { wasListOpen = false }
+                }
+            }
+    }
+
+    /// The list is something you summon to *check* something, so the motion has
+    /// to get out of the way: short, decelerating, and quicker to leave than to
+    /// arrive (the decision to dismiss is already made).
+    ///
+    /// Duration-based springs, not `.spring(response:)` — `response` is the
+    /// spring's natural period, not its settle time, so a "0.3" spring visibly
+    /// runs much longer than 300ms. That mismatch is why this kept feeling slow
+    /// however far the number came down. `.smooth` is critically damped, so the
+    /// duration given is the duration seen, and being a spring it retargets
+    /// cleanly if the orb is toggled again mid-flight.
+    private var sizeAnimation: Animation {
+        if model.listOpen { return .smooth(duration: 0.20) }   // opening
+        if wasListOpen { return .smooth(duration: 0.14) }      // closing, quicker
+        return .spring(response: 0.42, dampingFraction: 0.82)  // the pill, unchanged
+    }
+
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: model.listOpen ? 14 : 17, style: .continuous)
+    }
+
+    /// What the shell grows to. The list's height is whatever MenuContent needs,
+    /// measured as it renders. Before the first measurement we estimate from the
+    /// session count rather than guessing a constant: a wrong guess corrects
+    /// itself a frame later, and that second jump is what makes the first open
+    /// look abrupt.
+    private var size: CGSize {
+        if model.listOpen {
+            if model.listSize.width > 1 { return model.listSize }
+            let rows = max(store.sessions.count, 1)
+            return CGSize(width: 340, height: 6 + CGFloat(rows) * 56 + 37)
+        }
+        return CGSize(width: max(model.pillWidth, 34), height: 34)
+    }
+
+    @ViewBuilder private var inner: some View {
+        if model.listOpen {
+            MenuContent(store: store, markTrailing: onRight, markNamespace: markNS,
+                        onSettings: onSettings)
+                .background(GeometryReader { g in
+                    Color.clear
+                        .onAppear { model.listSize = g.size }
+                        .onChange(of: g.size) { _, s in model.listSize = s }
+                })
+                .transition(.opacity.animation(.easeOut(duration: 0.12)))
+        } else {
+            pillContent.transition(.opacity.animation(.easeOut(duration: 0.10)))
+        }
+    }
+
+    private var pillContent: some View {
+        HStack(spacing: 9) {
+            if !onRight { mark }
+            if model.expanded {
+                Text(model.message)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 240, alignment: .leading)
+                    .transition(.opacity.combined(with: .move(edge: onRight ? .trailing : .leading)))
+            }
+            if onRight { mark }
+        }
+        .padding(.horizontal, model.expanded ? 14 : 9)
+        .frame(height: 34)
+        .background(GeometryReader { g in
+            Color.clear
+                .onAppear { model.pillWidth = g.size.width }
+                .onChange(of: g.size.width) { _, w in model.pillWidth = w }
+        })
+        .animation(.spring(response: 0.42, dampingFraction: 0.82), value: model.expanded)
+    }
+
+    /// Matched with the footer's mark, so opening the list moves *this* mark
+    /// into the corner instead of fading it out while another fades in.
+    private var mark: some View {
+        markGlyph.matchedGeometryEffect(id: "rt.mark", in: markNS)
+    }
+
+    @ViewBuilder private var markGlyph: some View {
+        if model.pulsing {
+            PulsingMark(color: RTColor.attention)                        // news
+        } else if needsYou {
+            DotMark(color: RTColor.attention, opacities: [1, 1, 1, 1])   // still waiting
+        } else {
+            DotMark(color: .white.opacity(0.85), opacities: [1, 1, 1, 1])
+        }
+    }
+}
+
+/// The four-dot mark, sized for the orb.
+struct DotMark: View {
+    let color: Color
+    let opacities: [Double]
+    private let box: CGFloat = 15
+    private let dot: CGFloat = 4.4
+
+    var body: some View {
+        let a = box * 0.28, b = box * 0.72
+        let c = [CGPoint(x: a, y: a), CGPoint(x: b, y: a), CGPoint(x: a, y: b), CGPoint(x: b, y: b)]
+        ZStack {
+            ForEach(0..<4, id: \.self) { i in
+                Circle().fill(color).frame(width: dot, height: dot)
+                    .opacity(opacities[i]).position(c[i])
+            }
+        }
+        .frame(width: box, height: box)
+    }
+}
+
+private struct PulsingMark: View {
+    let color: Color
+    var body: some View {
+        TimelineView(.animation) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            let o = 0.35 + 0.65 * (0.5 + 0.5 * sin(t * 2 * .pi / 1.5))
+            DotMark(color: color, opacities: [o, o, o, o])
+        }
+    }
+}

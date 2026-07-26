@@ -85,6 +85,19 @@ final class MenuBarController: NSObject {
             name: Self.hookEventName, object: nil)
     }
 
+    /// In orb mode the status item disappears and alerts come from the orb, so
+    /// this controller stops presenting entirely.
+    func setActive(_ active: Bool) {
+        statusItem.isVisible = active
+        if !active {
+            popover.performClose(nil)
+            dismissToast()
+            queue.removeAll()
+        }
+    }
+
+    private var isActive: Bool { AppSettings.shared.presentation == .menuBar }
+
     // MARK: - Popover
 
     /// A click on the menu-bar item: while an attention toast is up, it's a call
@@ -303,6 +316,7 @@ final class MenuBarController: NSObject {
     }
 
     private func showNext() {
+        guard isActive else { queue.removeAll(); return }
         guard !popover.isShown, !queue.isEmpty else { return }
         let toast = queue.removeFirst()
         showingToast = true

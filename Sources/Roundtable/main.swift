@@ -27,6 +27,17 @@ if CommandLine.arguments.contains("--scan") {
     for (i, s) in NSScreen.screens.enumerated() {
         print("  screen[\(i)] frame=\(s.frame) uuid=\(s.displayUUID ?? "?") fullScreen=\(FullScreenDetector.isFullScreen(s))")
     }
+} else if CommandLine.arguments.contains("--test-orb") {
+    // Spike: toggle the floating orb in the running app, to verify a draggable
+    // (mouse-accepting) panel still draws over a full-screen app.
+    DistributedNotificationCenter.default().postNotificationName(
+        AppDelegate.orbToggleName, object: nil, userInfo: nil, deliverImmediately: true)
+    print("Toggled the floating orb in the running Roundtable.")
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+} else if CommandLine.arguments.contains("--proc-check") {
+    let procs = ProcessCorrelator.liveHarnessProcesses()
+    print("live harness processes: \(procs.count)")
+    for p in procs { print("  comm=\(p.comm) cwd=\(p.cwd)") }
 } else if CommandLine.arguments.contains("--hook") {
     forwardHookEvent()
 } else if CommandLine.arguments.contains("--install-hooks") {
@@ -82,17 +93,13 @@ extension Array {
 }
 
 func runScan(liveOnly: Bool) {
-    let live = liveOnly ? ProcessCorrelator.liveHarnessCWDs() : nil
-    var newest: [String: Session] = [:]
-    for s in adapters.flatMap({ $0.scan() }) {
-        if let live, !live.contains(s.cwd) { continue }
-        // Dedup per (harness, cwd): collapses old transcripts of one harness in a
-        // dir, but keeps a Claude + omp session running in the same dir distinct.
-        let key = "\(s.harness.rawValue)\u{1}\(s.cwd.isEmpty ? s.id : s.cwd)"
-        if let e = newest[key], e.updatedAt >= s.updatedAt { continue }
-        newest[key] = s
-    }
-    let sessions = newest.values.sorted { a, b in
+    let scanned = adapters.flatMap { $0.scan() }
+    // Same join the app uses, so the CLI can't drift from what the menu shows.
+    // `--scan-all` skips the liveness gate entirely, to test the parsers.
+    let kept = liveOnly
+        ? SessionStore.keepLive(scanned, liveProcesses: ProcessCorrelator.liveHarnessProcesses())
+        : scanned
+    let sessions = kept.sorted { a, b in
         if a.needsAttention != b.needsAttention { return a.needsAttention }
         return a.updatedAt > b.updatedAt
     }

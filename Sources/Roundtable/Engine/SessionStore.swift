@@ -119,8 +119,8 @@ final class SessionStore: ObservableObject {
         let adapters = self.adapters
         scanQueue.async { [weak self] in
             let scanned = adapters.flatMap { $0.scan() }
-            let live = ProcessCorrelator.liveHarnessCWDs()
-            let filtered = Self.keepLive(scanned, liveCWDs: live)
+            let live = ProcessCorrelator.liveHarnessProcesses()
+            let filtered = Self.keepLive(scanned, liveProcesses: live)
             Task { @MainActor in
                 self?.scanning = false
                 self?.apply(filtered)
@@ -129,21 +129,35 @@ final class SessionStore: ObservableObject {
     }
 
     /// The DISK+PROC join: keep only sessions whose cwd has a live harness
-    /// process, then collapse to the most-recently-active transcript per cwd.
-    /// Paths are canonicalized (symlinks/firmlinks resolved) because `lsof`
-    /// reports resolved paths while a harness may record the symlinked one. A
+    /// process, and keep as many transcripts per (harness, cwd) as there are
+    /// live processes there. Running two agents of the same harness in one
+    /// directory is normal, so collapsing to one row would hide real work; but
+    /// old transcripts in that directory still have to be dropped, and the
+    /// process count is what tells the two apart.
+    ///
+    /// Paths are canonicalized (symlinks/firmlinks resolved) because the process
+    /// cwd is the resolved path while a harness may record the symlinked one. A
     /// mismatch would silently drop a live session from the UI.
-    nonisolated private static func keepLive(_ sessions: [Session], liveCWDs: Set<String>) -> [Session] {
-        let live = Set(liveCWDs.map(canonical))
-        var newest: [String: Session] = [:]
-        for s in sessions where live.contains(canonical(s.cwd)) {
-            // Per (harness, cwd): a Claude and an omp session live in the same
-            // directory stay distinct; stale transcripts of one harness collapse.
-            let key = "\(s.harness.rawValue)\u{1}\(canonical(s.cwd))"
-            if let existing = newest[key], existing.updatedAt >= s.updatedAt { continue }
-            newest[key] = s
+    nonisolated static func keepLive(
+        _ sessions: [Session], liveProcesses: [(comm: String, cwd: String)]
+    ) -> [Session] {
+        // How many live agents of each harness are in each directory.
+        var counts: [String: Int] = [:]
+        for p in liveProcesses {
+            counts["\(p.comm)\u{1}\(canonical(p.cwd))", default: 0] += 1
         }
-        return Array(newest.values)
+
+        var grouped: [String: [Session]] = [:]
+        for s in sessions {
+            // `shortName` is also the process name we match on (claude, codex, pi, omp).
+            let key = "\(s.harness.shortName)\u{1}\(canonical(s.cwd))"
+            guard counts[key] != nil else { continue }   // nothing running there
+            grouped[key, default: []].append(s)
+        }
+
+        return grouped.flatMap { key, group in
+            group.sorted { $0.updatedAt > $1.updatedAt }.prefix(counts[key] ?? 1)
+        }
     }
 
     nonisolated private static func canonical(_ path: String) -> String {

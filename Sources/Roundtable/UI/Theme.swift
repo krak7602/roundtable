@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// One source of truth for state color, shared by the menu dots and the toast so
 /// a state looks the same everywhere. Only two colors carry meaning — amber says
@@ -17,6 +18,24 @@ enum RTColor {
         case .working, .idle:            return busy
         }
     }
+}
+
+/// The real native material. SwiftUI's own materials render flat grey inside a
+/// transparent floating panel (no window backdrop to sample), so anything that
+/// floats over other apps has to blend behind the window like this.
+struct VisualEffectBackground: NSViewRepresentable {
+    var material: NSVisualEffectView.Material = .hudWindow
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = material
+        v.blendingMode = .behindWindow
+        v.state = .active
+        v.isEmphasized = true
+        return v
+    }
+
+    func updateNSView(_ v: NSVisualEffectView, context: Context) { v.material = material }
 }
 
 /// Compact "time since" for the row's trailing meta ("now", "4m", "3h", "2d").

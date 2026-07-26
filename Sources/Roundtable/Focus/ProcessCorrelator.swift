@@ -21,14 +21,12 @@ enum ProcessCorrelator {
     /// Serena MCP servers launched with `--context claude-code`.
     private static let harnessComms: Set<String> = ["claude", "codex", "pi", "omp"]
 
-    /// The cwds of every live harness process. This is the liveness gate: a
-    /// session is "ongoing" only if a matching process is actually running.
-    static func liveHarnessCWDs() -> Set<String> {
-        var cwds: Set<String> = []
-        for pid in harnessPIDs() {
-            if let cwd = processCWD(pid) { cwds.insert(cwd) }
-        }
-        return cwds
+    /// Every live harness process, as (harness comm, cwd). This is the liveness
+    /// gate: a session is "ongoing" only if a matching process is running. The
+    /// duplicates matter — two agents of the same harness in one directory are
+    /// two sessions, so the caller counts these rather than collapsing them.
+    static func liveHarnessProcesses() -> [(comm: String, cwd: String)] {
+        harnessProcesses().compactMap { p in processCWD(p.pid).map { (p.comm, $0) } }
     }
 
     /// Terminal / multiplexer process names we know how to focus.
@@ -61,9 +59,11 @@ enum ProcessCorrelator {
 
     // MARK: - Process table
 
-    private static func harnessPIDs() -> [Int32] {
+    private static func harnessPIDs() -> [Int32] { harnessProcesses().map(\.pid) }
+
+    private static func harnessProcesses() -> [(pid: Int32, comm: String)] {
         let out = shell("/bin/ps", ["-axo", "pid=,comm="])
-        var pids: [Int32] = []
+        var found: [(Int32, String)] = []
         for line in out.split(separator: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard let sp = trimmed.firstIndex(of: " "),
@@ -71,10 +71,10 @@ enum ProcessCorrelator {
             let comm = String(trimmed[sp...]).trimmingCharacters(in: .whitespaces)
             let leaf = (comm as NSString).lastPathComponent
             if harnessComms.contains(leaf) {
-                pids.append(pid)
+                found.append((pid, leaf))
             }
         }
-        return pids
+        return found
     }
 
     /// A process's cwd via a direct libproc syscall, with no `lsof` subprocess

@@ -8,6 +8,11 @@ import AppKit
 /// (your turn), a gray highlight going around (working), or dim (idle).
 struct MenuContent: View {
     @ObservedObject var store: SessionStore
+    /// Mirror the footer so the mark sits on the right (orb mode, right edge).
+    var markTrailing: Bool = false
+    /// Shared with the orb so the footer mark and the orb's dot are one view
+    /// that travels between them, rather than two marks swapping places.
+    var markNamespace: Namespace.ID? = nil
     var onSettings: () -> Void = {}
 
     /// The row expanded into a full-height peek (takes over the menu).
@@ -73,7 +78,9 @@ struct MenuContent: View {
                 }
             }
 
-            MenuFooter(attentionCount: store.attentionCount, totalCount: store.sessions.count, onSettings: onSettings)
+            MenuFooter(attentionCount: store.attentionCount, totalCount: store.sessions.count,
+                       markTrailing: markTrailing, markNamespace: markNamespace,
+                       onSettings: onSettings)
         }
         .frame(width: 340)
         .padding(.top, 6)
@@ -131,7 +138,7 @@ struct SessionRow: View {
 
     var body: some View {
         recedingContent
-            .overlay(alignment: .trailing) { chevron.padding(.trailing, 12) }
+            .overlay(alignment: .trailing) { chevron.padding(.trailing, 5) }
             .background(Color.primary.opacity(hovering && !overExpand ? 0.055 : 0))
             .background(GeometryReader { g in
                 Color.clear
@@ -411,23 +418,40 @@ struct RTButton: ButtonStyle {
 struct MenuFooter: View {
     let attentionCount: Int
     let totalCount: Int
+    /// Put the mark on the right instead of the left. In orb mode the panel
+    /// grows out of the dot, so the mark has to land on the orb's own side —
+    /// it's the same object, settling into the corner it came from.
+    var markTrailing: Bool = false
+    var markNamespace: Namespace.ID? = nil
     var onSettings: () -> Void
 
     var body: some View {
         ZStack {
             count
             HStack {
-                Image(systemName: "circle.grid.2x2.fill")
-                    .font(.system(size: 12)).foregroundStyle(.tertiary)   // quiet — not a focus point
-                Spacer()
-                HStack(spacing: 2) {
-                    toolButton("gearshape", action: onSettings)
-                    toolButton("power", action: { NSApplication.shared.terminate(nil) })
-                }
+                if markTrailing { tools; Spacer(); mark } else { mark; Spacer(); tools }
             }
         }
         .padding(.horizontal, 13).padding(.vertical, 8)
         .overlay(alignment: .top) { Divider().opacity(0.4) }
+    }
+
+    /// The same mark the orb draws, at the same size, so when the orb opens it
+    /// is this exact view arriving in the corner — not a second logo appearing
+    /// beside where the first one was.
+    private var mark: some View {
+        DotMark(color: Color.primary.opacity(0.38), opacities: [1, 1, 1, 1])
+            .modifier(MatchedMark(namespace: markNamespace))
+            // Nudge to the orb dot's own inset (9 from the side, 17 from the
+            // bottom) so the arrival is a settle, not a jump.
+            .offset(x: markTrailing ? 4 : -4, y: -1.5)
+    }
+
+    private var tools: some View {
+        HStack(spacing: 2) {
+            toolButton("gearshape", action: onSettings)
+            toolButton("power", action: { NSApplication.shared.terminate(nil) })
+        }
     }
 
     @ViewBuilder private var count: some View {
@@ -532,4 +556,18 @@ struct PeekView: View {
 private struct PeekHeightKey: PreferenceKey {
     static var defaultValue: CGFloat { 0 }
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+/// Applies `matchedGeometryEffect` only when a namespace is supplied, so the
+/// same footer works inside the orb (where the mark travels) and in the menu
+/// bar (where there is nothing to travel from).
+struct MatchedMark: ViewModifier {
+    let namespace: Namespace.ID?
+    func body(content: Content) -> some View {
+        if let namespace {
+            content.matchedGeometryEffect(id: "rt.mark", in: namespace)
+        } else {
+            content
+        }
+    }
 }
