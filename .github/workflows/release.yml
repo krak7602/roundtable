@@ -1,7 +1,17 @@
 name: Release
 
+# Releases are cut by the version in Resources/Info.plist, not by hand-tagging.
+# Bump it, merge to main, and this builds the DMG and publishes v<that version>,
+# creating the tag as it goes. Merge anything else and it does nothing, because
+# a release for the current version already exists.
+#
+# The plist is the single source of truth on purpose: it is what the built app
+# reports as its version, so a release can never be numbered differently from the
+# binary inside it. Pushing a v* tag by hand still works, and is checked against
+# the plist for that same reason.
 on:
   push:
+    branches: [main]
     tags: ['v*']
   workflow_dispatch:
 
@@ -9,7 +19,45 @@ permissions:
   contents: write   # create the release and upload assets
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.decide.outputs.version }}
+      publish: ${{ steps.decide.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          plist=$(python3 -c "import plistlib;print(plistlib.load(open('Resources/Info.plist','rb'))['CFBundleShortVersionString'])")
+
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+            # A tag disagreeing with the plist would ship an app reporting one
+            # version under a release named another. Stop rather than guess.
+            if [[ "$version" != "$plist" ]]; then
+              echo "::error::tag v$version does not match Info.plist $plist"
+              exit 1
+            fi
+          else
+            version="$plist"
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" >/dev/null 2>&1; then
+            echo "v$version is already released — nothing to do"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "v$version has no release yet — building one"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
   release:
+    needs: check
+    if: needs.check.outputs.publish == 'true'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
@@ -33,6 +81,8 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          # Creates the tag at this commit when the run came from a branch push.
+          tag_name: v${{ needs.check.outputs.version }}
           files: Roundtable.dmg
           fail_on_unmatched_files: true
           generate_release_notes: true
@@ -40,7 +90,8 @@ jobs:
             ## Roundtable
 
             Open **Roundtable.dmg** and drag `Roundtable.app` into the Applications
-            folder. Look for the four-dot icon in your menu bar.
+            folder. Launch it and a small glass orb appears against the edge of your
+            screen — drag it wherever you like, and click it to open the session list.
 
             This build is ad-hoc signed (not yet notarized), so macOS Gatekeeper
             will complain on first launch. To open it:
