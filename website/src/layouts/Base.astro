@@ -13,6 +13,9 @@ const {
 
 const site = Astro.site?.toString() ?? 'https://roundtable.rahulkrishna.dev/';
 const ogImage = new URL('og.png', site).toString();
+// The site answers on its pages.dev address as well as the real domain; point
+// both at the real one so only that gets indexed.
+const canonical = new URL(Astro.url.pathname, site).toString();
 ---
 
 <!doctype html>
@@ -22,13 +25,14 @@ const ogImage = new URL('og.png', site).toString();
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="theme-color" content="#0b0b0d" />
 
     <meta property="og:type" content="website" />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
-    <meta property="og:url" content={site} />
+    <meta property="og:url" content={canonical} />
     <meta property="og:image" content={ogImage} />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={title} />
