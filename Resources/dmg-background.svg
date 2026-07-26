@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="600" height="400" viewBox="0 0 600 400">
+  <!--
+    Background for the installer window. Deliberately holds nothing but the
+    wordmark, the arrow and the hint: Finder draws Roundtable.app and the
+    Applications symlink itself, at the positions set in scripts/dmg.sh, and
+    anything painted underneath them would show through as a double image.
+  -->
+  <defs>
+    <linearGradient id="arrow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6C6C76" stop-opacity="0.25"/>
+      <stop offset="50%" stop-color="#A0A0A8" stop-opacity="0.75"/>
+      <stop offset="100%" stop-color="#A0A0A8" stop-opacity="0.95"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Flat, not a gradient. A radial glow over near-black bands badly at 8
+       bits, and every fix for that (noise, dithering) cost more in file size or
+       texture than the glow was worth. The site is mostly flat at this value
+       anyway. -->
+  <rect width="600" height="400" fill="#0B0B0D"/>
+
+  <!-- Wordmark, with the four-dot mark at the size it reads best. -->
+  <g transform="translate(232 44)">
+    <g transform="scale(0.15)">
+      <circle cx="34" cy="34" r="20" fill="#FAAD1C"/>
+      <circle cx="86" cy="34" r="20" fill="#FAAD1C"/>
+      <circle cx="34" cy="86" r="20" fill="#FAAD1C"/>
+      <circle cx="86" cy="86" r="20" fill="#FAAD1C"/>
+    </g>
+    <text x="30" y="15" font-family="Helvetica Neue, Helvetica, Arial" font-size="19"
+          font-weight="500" fill="#ECECEE" letter-spacing="0.2">Roundtable</text>
+  </g>
+
+  <!-- Sits between the two icons, clear of both. -->
+  <g transform="translate(258 190)">
+    <rect x="0" y="-1" width="66" height="2" rx="1" fill="url(#arrow)"/>
+    <path d="M66 -6 L78 0 L66 6 Z" fill="#A0A0A8" fill-opacity="0.95"/>
+  </g>
+
+  <text x="300" y="330" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial"
+        font-size="12.5" fill="#6C6C76" letter-spacing="0.3">Drag Roundtable into Applications</text>
+</svg>

@@ -22,9 +22,24 @@ cp Resources/Info.plist "$CONTENTS/Info.plist"
 cp Resources/AppIcon.icns "$CONTENTS/Resources/AppIcon.icns"
 cp -R Resources/HarnessIcons "$CONTENTS/Resources/HarnessIcons"
 
-echo "[sign] ad-hoc codesign"
-codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
+# Signed for real when an identity is available, ad-hoc otherwise. Only a
+# Developer ID signature can be notarized, and notarization in turn requires the
+# hardened runtime — which is why the entitlements come along: it blocks the
+# Apple Events we use to drive terminals unless we ask for them.
+#
+# --deep is deliberately absent. Apple deprecated it, and this bundle has no
+# nested code for it to reach anyway: one executable and some resources.
+if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
+  echo "[sign] codesign as $CODESIGN_IDENTITY"
+  codesign --force --options runtime --timestamp \
+    --entitlements Resources/Roundtable.entitlements \
+    --sign "$CODESIGN_IDENTITY" "$APP"
+  codesign --verify --strict --verbose=1 "$APP"
+else
+  echo "[sign] ad-hoc codesign (unsigned build — Gatekeeper will block it)"
+  codesign --force --sign - "$APP" >/dev/null 2>&1 || true
+fi
 
 echo "[done] built $APP"
-echo "  run:  open $APP    (look for the grid icon in the menu bar)"
+echo "  run:  open $APP    (the orb appears against a screen edge)"
 echo "  log:  log stream --predicate 'process == \"Roundtable\"' --level debug"

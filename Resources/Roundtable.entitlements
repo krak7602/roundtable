@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Notarization requires the hardened runtime, which blocks Apple Events by
+      default. Roundtable drives iTerm2 and Terminal through osascript to focus a
+      session and to type an approval into it, and although those events are sent
+      by a child process, TCC attributes them to us as the responsible process.
+      Without this the focus and inject paths fail only in signed builds — local
+      ad-hoc ones keep working, which makes it a miserable regression to trace.
+    -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+</dict>
+</plist>

@@ -4,6 +4,9 @@ Package.resolved
 
 # Assembled app bundle (produced by scripts/bundle.sh)
 Roundtable.app/
+Roundtable.dmg
+dmg-staging/
+dmg-rw.dmg
 
 # Backups the hook installers write into the user's config dirs — never data here,
 # but ignore the pattern so a stray copy is never committed

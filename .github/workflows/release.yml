@@ -67,16 +67,131 @@ jobs:
         with:
           xcode-version: latest-stable
 
+      # Everything signing-related is skipped when the secrets are absent, so
+      # this workflow keeps producing an (ad-hoc, Gatekeeper-blocked) DMG rather
+      # than failing. Secrets are never exposed to forks, so a PR from one just
+      # takes the unsigned path.
+      - name: Import the Developer ID certificate
+        id: cert
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${CERT_P12:-}" ]]; then
+            echo "no signing certificate configured — building unsigned"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # A throwaway keychain, so we never touch the runner's login one and
+          # the key material dies with the VM.
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          PASSWORD=$(uuidgen)
+          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
+
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          # Lets codesign use the key without a UI prompt, which would hang.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+
+          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN" \
+            | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)"/\1/')
+          if [[ -z "$IDENTITY" ]]; then
+            echo "::error::the imported certificate is not a Developer ID Application certificate"
+            exit 1
+          fi
+
+          # The team identifier is the parenthesised suffix of the identity, so
+          # it comes from whichever certificate was supplied rather than being
+          # written down here. A fork with its own certificate notarizes under
+          # its own team without touching this file.
+          TEAM_ID=$(sed -n 's/.*(\([A-Z0-9]\{10\}\))$/\1/p' <<<"$IDENTITY")
+          if [[ -z "$TEAM_ID" ]]; then
+            echo "::error::could not read a team identifier from the certificate"
+            exit 1
+          fi
+
+          # The identity carries the certificate holder's name. Runner logs on a
+          # public repo are public, so keep it out of them.
+          echo "::add-mask::$IDENTITY"
+          echo "found a Developer ID Application certificate for team $TEAM_ID"
+          echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
+          echo "team_id=$TEAM_ID" >> "$GITHUB_OUTPUT"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
       - name: Build and bundle the app
+        env:
+          CODESIGN_IDENTITY: ${{ steps.cert.outputs.identity }}
         run: ./scripts/bundle.sh release
 
       - name: Create DMG
+        env:
+          CODESIGN_IDENTITY: ${{ steps.cert.outputs.identity }}
+        run: ./scripts/dmg.sh
+
+      # Notarizing the DMG covers the app inside it, and stapling the ticket to
+      # the DMG means a first launch works with no network round-trip.
+      - name: Notarize and staple
+        if: steps.cert.outputs.signed == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
-          mkdir -p dmg-staging
-          cp -R Roundtable.app dmg-staging/
-          ln -s /Applications dmg-staging/Applications
-          hdiutil create -volname Roundtable -srcfolder dmg-staging \
-            -ov -format UDZO Roundtable.dmg
+          set -euo pipefail
+          xcrun notarytool submit Roundtable.dmg \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --team-id "${{ steps.cert.outputs.team_id }}" \
+            --wait
+          xcrun stapler staple Roundtable.dmg
+          # Prove it: this is the check Gatekeeper itself makes on first launch.
+          xcrun stapler validate Roundtable.dmg
+          spctl -a -t open --context context:primary-signature -vv Roundtable.dmg
+
+      # A notarized build opens on a double-click, so telling people how to talk
+      # their way past Gatekeeper would be worse than useless — it would imply
+      # something is wrong with the download.
+      - name: Write the release notes
+        run: |
+          cat > notes.md <<'EOF'
+          ## Roundtable
+
+          Open **Roundtable.dmg** and drag `Roundtable.app` into the Applications
+          folder. Launch it and a small glass orb appears against the edge of your
+          screen — drag it wherever you like, and click it to open the session list.
+
+          The first time it focuses a terminal, macOS asks for permission to
+          control it. That is what lets Roundtable jump to a session and answer a
+          prompt for you.
+          EOF
+
+          if [[ "${{ steps.cert.outputs.signed }}" != "true" ]]; then
+            cat >> notes.md <<'EOF'
+
+          ### First launch
+
+          This build is ad-hoc signed and not notarized, so macOS blocks it the
+          first time. Once you allow it, it launches normally forever after.
+
+          **macOS 15 and later** — open it, click **Done** at the warning, then go
+          to System Settings → Privacy & Security, scroll to the message about
+          Roundtable, and click **Open Anyway**. Control-clicking to bypass this
+          stopped working in macOS 15.
+
+          **macOS 14** — Control-click the app, choose **Open**, then confirm.
+
+          **Either, from a terminal** — `xattr -dr com.apple.quarantine /Applications/Roundtable.app`
+          EOF
+          fi
+
+          printf '\nRequires macOS 14 or later.\n' >> notes.md
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
@@ -86,17 +201,4 @@ jobs:
           files: Roundtable.dmg
           fail_on_unmatched_files: true
           generate_release_notes: true
-          body: |
-            ## Roundtable
-
-            Open **Roundtable.dmg** and drag `Roundtable.app` into the Applications
-            folder. Launch it and a small glass orb appears against the edge of your
-            screen — drag it wherever you like, and click it to open the session list.
-
-            This build is ad-hoc signed (not yet notarized), so macOS Gatekeeper
-            will complain on first launch. To open it:
-
-            - Right-click the app and choose **Open**, then confirm, **or**
-            - Run `xattr -dr com.apple.quarantine /Applications/Roundtable.app`
-
-            Requires macOS 14 or later.
+          body_path: notes.md

@@ -23,5 +23,10 @@
     <!-- Menu-bar-only agent app: no dock icon, no main window. -->
     <key>LSUIElement</key>
     <true/>
+    <!-- Shown in the permission prompt the first time Roundtable focuses a
+         session in iTerm2 or Terminal, or types an answer into one. Required:
+         without it macOS denies the request outright rather than asking. -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Roundtable needs permission to control your terminal so it can bring the right session to the front and answer prompts for you.</string>
 </dict>
 </plist>
