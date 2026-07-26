@@ -25,14 +25,28 @@ final class OrbController {
     private var collapseTimer: Timer?
     private var moveTimer: Timer?
     private var outsideClickMonitor: Any?
+    private var hoverMonitor: Any?
     /// Where to put the panel back after it stepped down to fit the list.
     private var restoreY: CGFloat?
 
-    private let panelSize = NSSize(width: 372, height: 560)
+    private let panelSize = NSSize(width: 432, height: 590)
     private let dotSize: CGFloat = 34
-    /// Distance from the panel's bottom/side edges to the dot's own edge. Must
-    /// match the padding in OrbView so the dot lands where the view draws it.
-    private let dotInset: CGFloat = 6
+    /// The gap the shell keeps from the screen edge it is snapped to.
+    private let edgeInset: CGFloat = 6
+    /// Transparent room reserved on every side purely so shadows can finish
+    /// falling off. A transparent panel clips just as hard as an opaque one, so
+    /// anything drawn past its bounds is sliced mid-gradient — which is exactly
+    /// what a dragged orb showed on whichever side happened to be over open
+    /// desktop. Sized for the widest shadow any state casts: the open list at
+    /// radius 22 offset 8, and a lifted orb at radius 20 offset 10.
+    ///
+    /// The panel is hung this far *past* the screen edge to pay for it, so the
+    /// margin costs nothing on screen and the tuck geometry is untouched.
+    private let shadowMargin: CGFloat = 30
+    /// Panel edge to shell edge. Both axes, since a dragged orb is nowhere near
+    /// a screen edge and clips the same way in every direction.
+    private var dotInset: CGFloat { edgeInset + shadowMargin }
+    private var dotBottomInset: CGFloat { edgeInset + shadowMargin }
 
     /// Opening Settings is the app's job, not the orb's.
     var onSettings: (() -> Void)?
@@ -51,7 +65,10 @@ final class OrbController {
         panel.hasShadow = false
         panel.level = .screenSaver
         panel.hidesOnDeactivate = false
-        panel.ignoresMouseEvents = false
+        // Starts click-through and is armed only while the cursor is actually
+        // over the orb — see armForCursor(). The panel is far bigger than what
+        // it draws, so anything else swallows clicks meant for the app beneath.
+        panel.ignoresMouseEvents = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         // Pin to dark: the orb floats over whatever the user is doing, so its
         // material must not follow the system theme (light mode would render the
@@ -72,8 +89,10 @@ final class OrbController {
         drag.onHover = { [weak self] inside in
             self?.model.hovering = inside
             if inside { self?.model.pulsing = false }   // seen it; stop nagging
+            if !inside { self?.disarm() }
         }
         drag.onClick = { [weak self] in self?.toggleList() }
+        drag.onDragChanged = { [weak self] dragging in self?.model.dragging = dragging }
         drag.onDragEnded = { [weak self] in self?.snapToEdge(animated: true) }
 
         // Grow the pill when something new needs you.
@@ -97,11 +116,75 @@ final class OrbController {
     func show() {
         restorePosition()
         panel.orderFrontRegardless()
+        watchForCursor()
     }
 
     func hide() {
         closeList()
+        stopWatchingCursor()
+        disarm()
         panel.orderOut(nil)
+    }
+
+    // MARK: - Click-through
+    //
+    // The panel is a fixed 432×590 sheet holding a 34pt dot, so almost all of it
+    // is empty. `ignoresMouseEvents` is the only thing the window server checks
+    // when deciding whether a click belongs to us, and it is all-or-nothing for
+    // the whole window — a view returning nil from hitTest is far too late, the
+    // event has already been routed here and dies rather than falling through.
+    //
+    // So the window is click-through by default and armed only while the cursor
+    // is genuinely over the orb. A global mouse-moved monitor does the arming:
+    // while we are click-through, every move goes to some other app, which is
+    // exactly what such a monitor sees. Disarming is the tracking area's job,
+    // since by then the events are ours. Mouse monitors need no Accessibility
+    // permission — only keyboard ones do.
+
+    private func watchForCursor() {
+        stopWatchingCursor()
+        hoverMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved]) { [weak self] _ in
+            MainActor.assumeIsolated { self?.armForCursor() }
+        }
+        armForCursor()
+    }
+
+    private func stopWatchingCursor() {
+        if let monitor = hoverMonitor { NSEvent.removeMonitor(monitor) }
+        hoverMonitor = nil
+    }
+
+    private func armForCursor() {
+        guard panel.isVisible, !model.dragging, !model.listOpen else { return }
+        guard let rect = interactiveScreenRect, rect.contains(NSEvent.mouseLocation) else { return }
+        panel.ignoresMouseEvents = false
+        model.hovering = true
+        model.pulsing = false
+    }
+
+    /// Back to click-through. Never while the list is open or a drag is running:
+    /// both need to keep receiving events wherever the cursor wanders.
+    private func disarm() {
+        guard !model.dragging, !model.listOpen else { return }
+        panel.ignoresMouseEvents = true
+    }
+
+    /// What the orb currently occupies, in screen coordinates.
+    private var interactiveScreenRect: NSRect? {
+        let local: NSRect
+        if !drag.listRect.isEmpty {
+            local = drag.listRect
+        } else if !drag.hitRect.isEmpty {
+            // At rest the dot is drawn shifted out past the screen edge, and it
+            // slides back in on hover. Cover both positions, or the cursor lands
+            // on a dot that is 11.5pt from where we think it is.
+            local = drag.hitRect
+                .union(drag.hitRect.offsetBy(dx: model.edge == .right ? orbTuck : -orbTuck, dy: 0))
+                .insetBy(dx: -2, dy: -2)
+        } else {
+            return nil
+        }
+        return local.offsetBy(dx: panel.frame.minX, dy: panel.frame.minY)
     }
 
     var isVisible: Bool { panel.isVisible }
@@ -120,6 +203,7 @@ final class OrbController {
     private func openList() {
         model.expanded = false          // a pill and the list shouldn't overlap
         model.listOpen = true
+        panel.ignoresMouseEvents = false   // the whole list has to stay clickable
         keepListOnScreen()
         watchForOutsideClick()
     }
@@ -128,6 +212,9 @@ final class OrbController {
         guard model.listOpen else { return }
         model.listOpen = false
         stopWatchingOutsideClick()
+        // Back to a dot: click-through again unless the cursor is still on it.
+        disarm()
+        armForCursor()
         if let y = restoreY {
             restoreY = nil
             glide(to: NSPoint(x: panel.frame.origin.x, y: y), save: false)
@@ -236,13 +323,13 @@ final class OrbController {
         if model.listOpen, model.listSize.width > 1 {
             let size = model.listSize
             let x = model.edge == .right ? panelSize.width - size.width - dotInset : dotInset
-            drag.listRect = NSRect(x: x, y: dotInset, width: size.width, height: size.height)
+            drag.listRect = NSRect(x: x, y: dotBottomInset, width: size.width, height: size.height)
             drag.hitRect = .zero
         } else {
             drag.listRect = .zero
             let width = model.expanded ? max(model.pillWidth, dotSize) : dotSize
             let x = model.edge == .right ? panelSize.width - width - dotInset : dotInset
-            drag.hitRect = NSRect(x: x, y: dotInset, width: width, height: dotSize)
+            drag.hitRect = NSRect(x: x, y: dotBottomInset, width: width, height: dotSize)
         }
     }
 
@@ -259,21 +346,23 @@ final class OrbController {
 
     private func restorePosition() {
         let d = UserDefaults.standard
-        // Keys are versioned: the panel's geometry changed when the dot moved to
-        // the bottom corner, so an old saved origin would land somewhere odd.
-        if let x = d.object(forKey: "orbX2") as? Double, let y = d.object(forKey: "orbY2") as? Double {
+        // Keys are versioned: the panel's geometry has changed twice (the dot
+        // moving to the bottom corner, then the bottom gaining room for the
+        // shadow), and an old saved origin would land the dot somewhere odd.
+        if let x = d.object(forKey: "orbX4") as? Double, let y = d.object(forKey: "orbY4") as? Double {
             panel.setFrameOrigin(NSPoint(x: x, y: y))
         } else if let screen = NSScreen.main {
             let f = screen.visibleFrame
-            panel.setFrameOrigin(NSPoint(x: f.maxX - panelSize.width, y: f.midY - panelSize.height / 2))
+            panel.setFrameOrigin(NSPoint(x: f.maxX - panelSize.width + shadowMargin,
+                                         y: f.midY - panelSize.height / 2))
         }
         snapToEdge(animated: false)
     }
 
     private func savePosition() {
         let o = panel.frame.origin
-        UserDefaults.standard.set(Double(o.x), forKey: "orbX2")
-        UserDefaults.standard.set(Double(o.y), forKey: "orbY2")
+        UserDefaults.standard.set(Double(o.x), forKey: "orbX4")
+        UserDefaults.standard.set(Double(o.y), forKey: "orbY4")
     }
 
     /// Drop it and it plops back against whichever side of the screen it's on,
@@ -295,11 +384,11 @@ final class OrbController {
             model.edge = newEdge
         }
 
-        let x = toLeft ? f.minX : f.maxX - panelSize.width
+        let x = toLeft ? f.minX - shadowMargin : f.maxX - panelSize.width + shadowMargin
         // Clamp on the dot, not the panel: the panel towers above the dot and
         // forcing all of it on screen would drag the orb down to the bottom.
-        let minY = f.minY - dotInset
-        let maxY = f.maxY - dotInset - dotSize
+        let minY = f.minY - dotBottomInset
+        let maxY = f.maxY - dotBottomInset - dotSize
         let y = min(max(panel.frame.origin.y, minY), maxY)
         let target = NSPoint(x: x, y: y)
 
@@ -346,7 +435,7 @@ final class OrbController {
 
     private func screenFor(_ point: NSPoint) -> NSScreen? {
         NSScreen.screens.first { $0.frame.contains(NSPoint(x: point.x + panelSize.width / 2,
-                                                           y: point.y + dotInset + dotSize / 2)) }
+                                                           y: point.y + dotBottomInset + dotSize / 2)) }
             ?? NSScreen.main
     }
 
@@ -378,6 +467,8 @@ final class OrbDragView: NSView {
 
     var onClick: (() -> Void)?
     var onHover: ((Bool) -> Void)?
+    /// Fires once when a press turns into a real drag, and again on release.
+    var onDragChanged: ((Bool) -> Void)?
     var onDragEnded: (() -> Void)?
 
     /// The dot/pill, in panel coordinates. Handled by this view.
@@ -420,8 +511,9 @@ final class OrbDragView: NSView {
         guard !ignoringClick, let window, let offset = grabOffset else { return }
         let mouse = NSEvent.mouseLocation
         let origin = NSPoint(x: mouse.x - offset.x, y: mouse.y - offset.y)
-        if let start = startOrigin, hypot(origin.x - start.x, origin.y - start.y) > 3 {
+        if let start = startOrigin, hypot(origin.x - start.x, origin.y - start.y) > 3, !didMove {
             didMove = true
+            onDragChanged?(true)       // it's a drag, not a click: let it lift
         }
         window.setFrameOrigin(origin)
     }
@@ -431,6 +523,7 @@ final class OrbDragView: NSView {
         guard !ignoringClick else { return }
         grabOffset = nil
         startOrigin = nil
+        if didMove { onDragChanged?(false) }
         didMove ? onDragEnded?() : onClick?()
     }
 
@@ -452,6 +545,15 @@ final class OrbDragView: NSView {
 
 enum OrbEdge { case left, right }
 
+/// How far the dot hides past the screen edge at rest. Bounded by the ring of
+/// empty space around the mark inside the circle (a 15pt mark in a 34pt dot
+/// leaves ~9.5pt each side): tuck deeper and the screen edge slices through the
+/// outer column of dots, which reads as broken, not tucked.
+///
+/// Shared, because the panel has to know where the dot ended up in order to take
+/// clicks there.
+let orbTuck: CGFloat = 11.5
+
 @MainActor
 final class OrbModel: ObservableObject {
     @Published var hovering = false
@@ -459,6 +561,9 @@ final class OrbModel: ObservableObject {
     @Published var edge: OrbEdge = .right
     @Published var expanded = false          // the attention pill
     @Published var listOpen = false          // the full session list
+    /// True while the user is carrying the orb around, so it can lift off the
+    /// desktop instead of sliding along it.
+    @Published var dragging = false
     /// Blinking is reserved for news. Steady amber means "still waiting".
     @Published var pulsing = false
     @Published var message = ""
@@ -484,11 +589,7 @@ struct OrbView: View {
     private var onRight: Bool { model.edge == .right }
     private var corner: Alignment { onRight ? .bottomTrailing : .bottomLeading }
 
-    /// How far the dot hides past the screen edge at rest. Bounded by the ring
-    /// of empty space around the mark inside the circle (a 15pt mark in a 34pt
-    /// dot leaves ~9.5pt each side): tuck deeper and the screen edge slices
-    /// through the outer column of dots, which reads as broken, not tucked.
-    private let tuck: CGFloat = 11.5
+    private var tuck: CGFloat { orbTuck }
 
     var body: some View {
         ZStack(alignment: corner) {
@@ -496,7 +597,12 @@ struct OrbView: View {
             shell
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: corner)
-        .padding(6)
+        // Room for the shadow on every side but the top, which has the rest of
+        // the panel above it anyway. Must match edgeInset + shadowMargin, or the
+        // dot lands somewhere other than where the panel takes clicks.
+        .padding(.horizontal, 36)
+        .padding(.top, 6)
+        .padding(.bottom, 36)
     }
 
     /// One piece of glass for every state. The shell itself never gets replaced:
@@ -527,13 +633,14 @@ struct OrbView: View {
             .overlay(shape.fill(RTColor.attention.opacity(!model.listOpen && needsYou ? 0.16 : 0)))
             .clipShape(shape)                               // …and reveal it as the shell grows
             .overlay(shape.strokeBorder(.white.opacity(0.16), lineWidth: 0.5))
-            .shadow(color: .black.opacity(model.listOpen ? 0.45 : 0.4),
-                    radius: model.listOpen ? 22 : 10, y: model.listOpen ? 8 : 4)
+            .scaleEffect(model.dragging ? 1.06 : 1)
+            .shadow(color: .black.opacity(lift.opacity), radius: lift.radius, y: lift.offset)
             // Half-tucked past the edge at rest; pulls fully into view otherwise.
             .offset(x: resting ? (onRight ? tuck : -tuck) : 0)
             .opacity(resting ? (needsYou ? 0.78 : 0.5) : 1)
             .animation(sizeAnimation, value: size)
             .animation(.spring(response: 0.34, dampingFraction: 0.78), value: resting)
+            .animation(.spring(response: 0.26, dampingFraction: 0.7), value: model.dragging)
             .onChange(of: model.listOpen) { _, open in
                 // Keep the slower curve for the closing animation too.
                 wasListOpen = true
@@ -557,6 +664,17 @@ struct OrbView: View {
         if model.listOpen { return .smooth(duration: 0.20) }   // opening
         if wasListOpen { return .smooth(duration: 0.14) }      // closing, quicker
         return .spring(response: 0.42, dampingFraction: 0.82)  // the pill, unchanged
+    }
+
+    /// How high off the desktop the shell is sitting. Picking the orb up throws
+    /// the shadow wider and further down, and thins it out: a light source stays
+    /// put while the object rises, so its shadow spreads and softens rather than
+    /// darkening. Keeping the resting density here would read as the orb being
+    /// pressed into the screen instead of lifted off it.
+    private var lift: (radius: CGFloat, offset: CGFloat, opacity: Double) {
+        if model.dragging { return (20, 10, 0.32) }
+        if model.listOpen { return (22, 8, 0.45) }
+        return (10, 4, 0.4)
     }
 
     private var shape: RoundedRectangle {
