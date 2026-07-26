@@ -1,0 +1,64 @@
+name: Website
+
+# Builds the marketing site and deploys it to Cloudflare Pages. Deploying from
+# here rather than Cloudflare's own Git integration keeps the build in one place
+# (this repo's root is a Swift package, the site is a subdirectory) and pins the
+# Node version, instead of relying on what the Pages build image happens to use.
+#
+# Needs two repository secrets:
+#   CLOUDFLARE_API_TOKEN   a token with the "Cloudflare Pages: Edit" permission
+#   CLOUDFLARE_ACCOUNT_ID  from the Cloudflare dashboard sidebar
+on:
+  push:
+    branches: [main]
+    paths: ['website/**', '.github/workflows/website.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: website-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Create the Pages project if it doesn't exist yet
+        # First run only. Fails harmlessly once the project is there, so the
+        # deploy below is the same on every subsequent push.
+        continue-on-error: true
+        run: >
+          npx wrangler@4 pages project create roundtable
+          --production-branch main
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Deploy
+        run: >
+          npx wrangler@4 pages deploy dist
+          --project-name roundtable
+          --branch main
+          --commit-dirty=true
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
