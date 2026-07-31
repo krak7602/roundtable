@@ -12,6 +12,20 @@ dmg-rw.dmg
 # but ignore the pattern so a stray copy is never committed
 *.roundtable-backup
 
+# Signing material. None of this belongs in the repo — the release workflow gets
+# the certificate from a secret and decodes it on the runner. Listed explicitly
+# because jj auto-snapshots new files into the working commit rather than leaving
+# them untracked, so a key dropped in here would otherwise be committed the
+# moment it appeared.
+*.p12
+*.p8
+*.cer
+*.certSigningRequest
+*.mobileprovision
+*.provisionprofile
+*.keychain
+*.keychain-db
+
 # Design scratch (HTML iterations + session notes from the design tooling)
 .concepteur/
 
