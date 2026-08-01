@@ -28,9 +28,11 @@ enum AnswerInjector {
     static func answer(cwd: String, harness: Harness, decision: ApprovalDecision) {
         DispatchQueue.global(qos: .userInitiated).async {
             guard let loc = ProcessCorrelator.locate(cwd: cwd) else {
+                DebugLog.log("inject", "\(decision) for \(harness.shortName): no live process @ \(cwd)")
                 NSLog("[Roundtable] answer: no live process @ \(cwd)")
                 return
             }
+            DebugLog.log("inject", "\(decision) for \(harness.shortName) @ \(cwd) via \(backend(for: loc).map { String(describing: $0) } ?? "none")")
             deliver(keystrokes(harness: harness, decision: decision), loc: loc)
         }
     }

@@ -255,6 +255,7 @@ final class MenuBarController: NSObject {
     private func handleHookEvent(event: String, cwd: String, message: String,
                                  sessionId: String, toolName: String, command: String?,
                                  dedupeId: String) {
+        DebugLog.log("hook", "event=\(event) tool=\(toolName) cwd=\(cwd)")
         let isPermission = (event == "Notification" && message.range(of: "permission", options: .caseInsensitive) != nil)
             || event == "PermissionRequest"
         guard isPermission else { return }

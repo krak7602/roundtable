@@ -91,6 +91,7 @@ final class SessionStore: ObservableObject {
     /// main thread (it shells out to find the pane) and folded back in.
     func recordApproval(id: String, sessionId: String, cwd: String, harness: Harness, tool: String, command: String?) {
         guard !(sessionId.isEmpty && cwd.isEmpty) else { return }
+        DebugLog.log("hook", "approval recorded tool=\(tool) cwd=\(cwd)")
         let key = sessionId.isEmpty ? Self.canonical(cwd) : sessionId
         let now = Date()
         let existing = pendingApprovals[key]
@@ -251,6 +252,7 @@ final class SessionStore: ObservableObject {
         lastApplyAt = Date()
 
         var fresh: [Session] = []
+        DebugLog.log("scan", "sessions=[\(sessions.map { "\($0.name.prefix(16)):\($0.state.rawValue)" }.joined(separator: " "))] ledger=[\(announced.map { "\($0.key.prefix(8)):\($0.value.rawValue)" }.joined(separator: " "))] baseline=\(baselinePending)")
         for s in sessions where s.needsAttention {
             switch announced[s.id] {
             case nil:
@@ -271,6 +273,7 @@ final class SessionStore: ObservableObject {
         let isBaseline = baselinePending
         baselinePending = false
         guard !fresh.isEmpty else { return }
+        DebugLog.log("announce", "fresh=\(fresh.map(\.name)) baseline=\(isBaseline)")
         deliver(AttentionAnnouncement(sessions: fresh, isBaseline: isBaseline))
     }
 
@@ -279,6 +282,7 @@ final class SessionStore: ObservableObject {
     /// telling the user still counts as the user being told.
     private func deliver(_ announcement: AttentionAnnouncement) {
         guard AppSettings.shared.deferTerminalNotifications else {
+            DebugLog.log("announce", "delivering \(announcement.sessions.count) direct")
             announcements.send(announcement)
             return
         }
@@ -289,6 +293,7 @@ final class SessionStore: ObservableObject {
             let kept = announcement.sessions.filter {
                 !($0.state == .waitingPermission && ProcessCorrelator.terminalSelfNotifies(cwd: $0.cwd))
             }
+            DebugLog.log("announce", "deferred filter kept \(kept.count)/\(announcement.sessions.count)")
             guard !kept.isEmpty else { return }
             Task { @MainActor in
                 self?.announcements.send(

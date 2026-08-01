@@ -24,9 +24,11 @@ enum FocusEngine {
         guard !cwd.isEmpty else { return }
         DispatchQueue.global(qos: .userInitiated).async {
             guard let loc = ProcessCorrelator.locate(cwd: cwd) else {
+                DebugLog.log("focus", "no live process for \(name) @ \(cwd)")
                 NSLog("[Roundtable] focus: no live process for \(name) @ \(cwd)")
                 return
             }
+            DebugLog.log("focus", "\(name) @ \(cwd) → \(loc.terminalApp ?? "?") pane=\(loc.paneEnv["MUXY_PANE_ID"] ?? loc.paneEnv["ITERM_SESSION_ID"] ?? loc.paneEnv["TMUX_PANE"] ?? "-")")
             // Terminal-specific selection first, so the target pane/workspace is
             // active before the app comes forward.
             select(cwd: cwd, loc: loc)

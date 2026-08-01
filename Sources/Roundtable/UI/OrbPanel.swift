@@ -315,6 +315,7 @@ final class OrbController {
     /// Something genuinely new. One pill, one sound, however many sessions it
     /// covers.
     private func announce(_ announcement: AttentionAnnouncement) {
+        DebugLog.log("orb", "got \(announcement.sessions.count); mode=\(AppSettings.shared.presentation.rawValue) listOpen=\(model.listOpen) visible=\(panel.isVisible)")
         guard AppSettings.shared.presentation == .orb else { return }
         guard !model.listOpen else { return }   // already looking at it
         playSound(permission: announcement.isPermission)

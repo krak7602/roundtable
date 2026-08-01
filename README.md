@@ -48,6 +48,8 @@ it's knowing which session is waiting. That's the problem Roundtable solves.
   process exists, matched to its transcript by working directory.
 - **Permission-prompt detection**, the one thing reading transcripts can't do. A
   single toggle in Settings installs each harness's native hook.
+- **Updates itself.** Checks this repo's releases twice a day and offers a
+  one-click update in the orb when a new version is out.
 
 ## Supported harnesses
 
@@ -76,6 +78,10 @@ open Roundtable.app                 # look for the dot tucked against a screen e
 
 `--scan` is the quickest way to see the engine work against your live sessions
 without opening the GUI.
+
+A locally built app is ad-hoc signed, so macOS asks you to allow it once under
+System Settings → Privacy & Security. (Released downloads are notarized and
+open directly.)
 
 ## How it works
 
@@ -132,7 +138,8 @@ terminal lets you script:
 ## Privacy & caveats
 
 - Everything stays on your machine. Roundtable reads on-disk transcripts and
-  running processes locally, and makes no network calls.
+  running processes locally, and sends nothing anywhere — no telemetry, no
+  accounts, no analytics.
 - It uses one private API: `CGSCopyManagedDisplaySpaces`, for per-display
   full-screen detection (the same call yabai and AltTab use). It's loaded through
   `dlsym`, so a future macOS that removes it degrades gracefully instead of
@@ -140,8 +147,9 @@ terminal lets you script:
 - Enabling permission detection writes a hook into `~/.claude/settings.json`,
   `~/.codex/config.toml`, or `~/.omp/agent/hooks/`. Each original is backed up
   once before anything changes, and every toggle is reversible.
-- `bundle.sh` ad-hoc-signs the app, so on first launch you may need to allow it
-  in System Settings under Privacy & Security.
+- The update check asks this repo's GitHub releases for the latest version
+  number, twice a day, and nothing else. Turn it off entirely with
+  `defaults write dev.rahulkrishna.roundtable automaticUpdateChecks -bool false`.
 
 ## Shortcuts
 
@@ -173,6 +181,21 @@ Issues and PRs are welcome. Each harness is a self-contained `HarnessAdapter` of
 around a hundred lines that tails a transcript into the shared `Session` model,
 which makes adding a new one the easiest place to start. Please keep the build
 warning-free (`swift build`).
+
+**Reporting a bug?** Attach a debug log — it records the decision points
+(session states, what was announced and why, hook events, focus and injection
+attempts), which is usually the difference between a fix and a guess:
+
+```sh
+defaults write dev.rahulkrishna.roundtable debugLogging -bool true
+# relaunch Roundtable, reproduce the problem, then attach:
+#   ~/Library/Logs/Roundtable/debug.log
+defaults delete dev.rahulkrishna.roundtable debugLogging   # turn it back off
+```
+
+Nothing is logged unless you set the flag, and nothing ever leaves your machine
+on its own. The log does contain your project names and paths — skim it before
+attaching.
 
 ## License
 
