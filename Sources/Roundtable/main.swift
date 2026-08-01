@@ -34,6 +34,11 @@ if CommandLine.arguments.contains("--scan") {
         AppDelegate.orbToggleName, object: nil, userInfo: nil, deliverImmediately: true)
     print("Toggled the floating orb in the running Roundtable.")
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
+} else if CommandLine.arguments.contains("--test-update") {
+    DistributedNotificationCenter.default().postNotificationName(
+        AppDelegate.testUpdateName, object: nil, userInfo: nil, deliverImmediately: true)
+    print("Forced the update button on in the running Roundtable. Open the orb to see it.")
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.2))
 } else if CommandLine.arguments.contains("--proc-check") {
     let procs = ProcessCorrelator.liveHarnessProcesses()
     print("live harness processes: \(procs.count)")

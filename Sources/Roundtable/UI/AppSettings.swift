@@ -31,6 +31,11 @@ final class AppSettings: ObservableObject {
     @Published var waitingSound: String { didSet { d.set(waitingSound, forKey: "waitingSound") } }
     @Published var permissionSound: String { didSet { d.set(permissionSound, forKey: "permissionSound") } }
 
+    /// Ask GitHub twice a day whether a newer build exists. On by default —
+    /// the app is downloaded directly rather than from an App Store, so nothing
+    /// else would ever tell the user an update is out.
+    @Published var automaticUpdateChecks: Bool { didSet { d.set(automaticUpdateChecks, forKey: "automaticUpdateChecks") } }
+
     /// Harness short-names the user has hidden from the menu / toasts.
     @Published var hiddenHarnesses: Set<String> { didSet { d.set(Array(hiddenHarnesses), forKey: "hiddenHarnesses") } }
 
@@ -59,6 +64,7 @@ final class AppSettings: ObservableObject {
         soundEnabled = d.object(forKey: "soundEnabled") as? Bool ?? true
         waitingSound = d.string(forKey: "waitingSound") ?? "Submarine"
         permissionSound = d.string(forKey: "permissionSound") ?? "Hero"
+        automaticUpdateChecks = d.object(forKey: "automaticUpdateChecks") as? Bool ?? true
         hiddenHarnesses = Set(d.stringArray(forKey: "hiddenHarnesses") ?? [])
         fireOnAllScreens = d.bool(forKey: "fireOnAllScreens")
         deferTerminalNotifications = d.bool(forKey: "deferTerminalNotifications")

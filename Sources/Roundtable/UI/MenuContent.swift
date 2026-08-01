@@ -425,15 +425,26 @@ struct MenuFooter: View {
     var markNamespace: Namespace.ID? = nil
     var onSettings: () -> Void
 
+    @ObservedObject private var updater = UpdateController.shared
+
     var body: some View {
         ZStack {
             count
             HStack {
-                if markTrailing { tools; Spacer(); mark } else { mark; Spacer(); tools }
+                // The update button rides beside the mark rather than with the
+                // gear and power. Those two are always there and always the
+                // same; this appears only when there is something to do, and
+                // the mark's side is the side the orb itself came from.
+                if markTrailing {
+                    tools; Spacer(); updateButton; mark
+                } else {
+                    mark; updateButton; Spacer(); tools
+                }
             }
         }
         .padding(.horizontal, 13).padding(.vertical, 8)
         .overlay(alignment: .top) { Divider().opacity(0.4) }
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: updater.state)
     }
 
     /// The same mark the orb draws, at the same size, so when the orb opens it
@@ -452,6 +463,61 @@ struct MenuFooter: View {
             toolButton("gearshape", action: onSettings)
             toolButton("power", action: { NSApplication.shared.terminate(nil) })
         }
+    }
+
+    /// Present only when there is something to say. An update control that is
+    /// always visible and usually greyed out is noise in a footer this small.
+    @ViewBuilder private var updateButton: some View {
+        switch updater.state {
+        case .available(let release):
+            pill("arrow.down.circle.fill", "Update", tint: RTColor.attention) {
+                updater.install()
+            }
+            .help("Version \(release.version) is available. You have \(updater.currentVersion).")
+
+        case .downloading(let fraction):
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.mini)
+                Text("\(Int(fraction * 100))%")
+                    .font(.system(size: 10.5, weight: .medium)).monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 7).frame(height: 20)
+            .transition(.opacity)
+
+        case .readyToRelaunch:
+            pill("arrow.clockwise", "Restart", tint: RTColor.ready) {
+                updater.relaunch()
+            }
+            .help("The update is installed. Restart to use it.")
+
+        case .failed(let message):
+            pill("exclamationmark.triangle.fill", "Retry", tint: .secondary) {
+                Task { await updater.check() }
+            }
+            .help(message)
+
+        case .idle, .checking:
+            EmptyView()
+        }
+    }
+
+    private func pill(_ symbol: String, _ label: String, tint: Color,
+                      action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: symbol).font(.system(size: 10, weight: .semibold))
+                Text(label).font(.system(size: 10.5, weight: .medium))
+            }
+            .foregroundStyle(tint)
+            .padding(.horizontal, 7)
+            .frame(height: 20)
+            .background(Capsule().fill(tint.opacity(0.14)))
+            .overlay(Capsule().strokeBorder(tint.opacity(0.28), lineWidth: 0.5))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .transition(.scale(scale: 0.8).combined(with: .opacity))
     }
 
     @ViewBuilder private var count: some View {

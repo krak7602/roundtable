@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var orb: OrbController?
 
     nonisolated static let orbToggleName = Notification.Name("dev.rahulkrishna.roundtable.orbToggle")
+    nonisolated static let testUpdateName = Notification.Name("dev.rahulkrishna.roundtable.testUpdate")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -33,6 +34,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         DistributedNotificationCenter.default().addObserver(
             self, selector: #selector(toggleOrb), name: Self.orbToggleName, object: nil)
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(testUpdate), name: Self.testUpdateName, object: nil)
+
+        UpdateController.shared.start()
 
         HotkeyManager.shared.handler = { [weak self] action in self?.perform(action) }
         HotkeyManager.shared.numberHandler = { [weak self] index in self?.jump(to: index) }
@@ -54,6 +59,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             orb?.show()
         }
+    }
+
+    /// `--test-update`: force the update button on so its look can be checked
+    /// without waiting for a real release to exist.
+    @objc private func testUpdate() {
+        MainActor.assumeIsolated { UpdateController.shared.showFakeUpdate() }
     }
 
     // MARK: - Hotkeys
