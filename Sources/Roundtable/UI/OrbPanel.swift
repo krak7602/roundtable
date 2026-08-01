@@ -86,11 +86,6 @@ final class OrbController {
         drag.addSubview(host)
         panel.contentView = drag
 
-        drag.onHover = { [weak self] inside in
-            self?.model.hovering = inside
-            if inside { self?.model.pulsing = false }   // seen it; stop nagging
-            if !inside { self?.disarm() }
-        }
         drag.onClick = { [weak self] in self?.toggleList() }
         drag.onDragChanged = { [weak self] dragging in self?.model.dragging = dragging }
         drag.onDragEnded = { [weak self] in self?.snapToEdge(animated: true) }
@@ -135,11 +130,11 @@ final class OrbController {
     // event has already been routed here and dies rather than falling through.
     //
     // So the window is click-through by default and armed only while the cursor
-    // is genuinely over the orb. A global mouse-moved monitor does the arming:
-    // while we are click-through, every move goes to some other app, which is
-    // exactly what such a monitor sees. Disarming is the tracking area's job,
-    // since by then the events are ours. Mouse monitors need no Accessibility
-    // permission — only keyboard ones do.
+    // is genuinely over the orb, decided by a global mouse-moved monitor. That
+    // monitor sees the cursor whether or not the panel is armed — verified on
+    // device — so it drives both arming and the hover ring, and there is no
+    // second mechanism to disagree with it. Mouse monitors need no Accessibility
+    // permission; only keyboard ones do.
 
     private func watchForCursor() {
         stopWatchingCursor()
@@ -154,12 +149,46 @@ final class OrbController {
         hoverMonitor = nil
     }
 
+    /// How far the orb notices the cursor, as a share of the screen's width.
+    /// Expressed as a fraction rather than points because it is meant to feel the
+    /// same on a laptop and a 27-inch display — a fixed reach that is inviting on
+    /// one is a bullseye on the other.
+    private let hoverReachFraction: CGFloat = 0.12
+
+    private var hoverRadius: CGFloat {
+        let width = screenFor(panel.frame.origin)?.frame.width ?? 1440
+        return width * hoverReachFraction
+    }
+
+    /// Runs on every cursor movement and decides two separate things.
+    ///
+    /// Hover is a *ring*: the orb comes forward once the cursor is within reach
+    /// from any direction, which is why this is a distance test and not a
+    /// tracking area — those are rectangular, and a rectangle large enough to
+    /// feel right at the sides reaches absurdly far diagonally.
+    ///
+    /// Arming is a rect, and stays tight to what is drawn. The two must not be
+    /// conflated: the ring is only a lighting cue, while arming decides whether
+    /// this window swallows a click that belonged to the app underneath.
     private func armForCursor() {
         guard panel.isVisible, !model.dragging, !model.listOpen else { return }
-        guard let rect = interactiveScreenRect, rect.contains(NSEvent.mouseLocation) else { return }
-        panel.ignoresMouseEvents = false
-        model.hovering = true
-        model.pulsing = false
+        let mouse = NSEvent.mouseLocation
+
+        let clickable = interactiveScreenRect
+        let onOrb = clickable?.contains(mouse) ?? false
+        panel.ignoresMouseEvents = !onOrb
+
+        var near = false
+        if !drag.hitRect.isEmpty {
+            let centre = NSPoint(x: panel.frame.minX + drag.hitRect.midX,
+                                 y: panel.frame.minY + drag.hitRect.midY)
+            near = hypot(mouse.x - centre.x, mouse.y - centre.y) <= hoverRadius
+        }
+
+        if model.hovering != near {
+            model.hovering = near
+            if near { model.pulsing = false }
+        }
     }
 
     /// Back to click-through. Never while the list is open or a drag is running:
@@ -333,6 +362,7 @@ final class OrbController {
         }
     }
 
+
     // MARK: - Position
     //
     // The panel is much taller than the dot (it has to hold the list), and the
@@ -466,13 +496,12 @@ final class OrbDragView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     var onClick: (() -> Void)?
-    var onHover: ((Bool) -> Void)?
     /// Fires once when a press turns into a real drag, and again on release.
     var onDragChanged: ((Bool) -> Void)?
     var onDragEnded: (() -> Void)?
 
     /// The dot/pill, in panel coordinates. Handled by this view.
-    var hitRect: NSRect = .zero { didSet { if hitRect != oldValue { updateTrackingAreas() } } }
+    var hitRect: NSRect = .zero
     /// The open list, in panel coordinates. Handed to SwiftUI.
     var listRect: NSRect = .zero
 
@@ -527,18 +556,6 @@ final class OrbDragView: NSView {
         didMove ? onDragEnded?() : onClick?()
     }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        for area in trackingAreas { removeTrackingArea(area) }
-        guard !hitRect.isEmpty else { return }
-        addTrackingArea(NSTrackingArea(
-            rect: hitRect.insetBy(dx: -6, dy: -6),
-            options: [.mouseEnteredAndExited, .activeAlways],
-            owner: self, userInfo: nil))
-    }
-
-    override func mouseEntered(with event: NSEvent) { onHover?(true) }
-    override func mouseExited(with event: NSEvent) { onHover?(false) }
 }
 
 // MARK: - View
