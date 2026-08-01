@@ -75,7 +75,19 @@ final class ClaudeCodeAdapter: HarnessAdapter, @unchecked Sendable {
             return nil
         }
         let sessionId = metaValue("sessionId") ?? url.deletingPathExtension().lastPathComponent
-        let cwd = metaValue("cwd") ?? ""
+
+        // The cwd is the join key to a live process, so it must be *stable* —
+        // and the newest record's cwd is not. Records stamp their own cwd, and a
+        // subagent or tool run in a subdirectory leaves e.g. `<root>/workers/api`
+        // as the last one written. Taking it made the session's identity flap:
+        // the moment a subdirectory record was newest, the process join failed
+        // and the session vanished from the list. Timed badly — a turn ending on
+        // exactly such a record, with no writes after — it stayed vanished, and
+        // the turn-end notification never fired at all.
+        //
+        // The session's root is the cwd that is an ancestor of every other cwd
+        // in the window. Failing that (no containment relation), the most seen.
+        let cwd = homeCwd(entries) ?? metaValue("cwd") ?? ""
         // Name priority: the user's rename, then the AI title, then the random slug.
         let name = customTitle()
             ?? metaValue("aiTitle")
@@ -94,6 +106,22 @@ final class ClaudeCodeAdapter: HarnessAdapter, @unchecked Sendable {
             lastLine: lastLine,
             updatedAt: mtime
         )
+    }
+
+    /// The directory this session belongs to, from all cwds seen in the window.
+    private func homeCwd(_ entries: [[String: Any]]) -> String? {
+        var counts: [String: Int] = [:]
+        for entry in entries {
+            if let c = entry["cwd"] as? String, !c.isEmpty { counts[c, default: 0] += 1 }
+        }
+        guard !counts.isEmpty else { return nil }
+        let paths = Array(counts.keys)
+        // The root contains the rest. At most one path can satisfy this, so the
+        // scan order of the dictionary doesn't matter.
+        if let root = paths.first(where: { p in
+            paths.allSatisfy { $0 == p || $0.hasPrefix(p + "/") }
+        }) { return root }
+        return counts.max { $0.value < $1.value }?.key
     }
 
     /// Walk the tail backwards to the last message-bearing entry and classify it.
