@@ -90,10 +90,16 @@ final class OrbController {
         drag.onDragChanged = { [weak self] dragging in self?.model.dragging = dragging }
         drag.onDragEnded = { [weak self] in self?.snapToEdge(animated: true) }
 
-        // Grow the pill when something new needs you.
+        // Steady state (the count, the amber tint) follows the list.
         store.$sessions
             .receive(on: RunLoop.main)
             .sink { [weak self] sessions in self?.apply(sessions) }
+            .store(in: &cancellables)
+
+        // News (the pill, the sound) comes from the store's attention ledger.
+        store.announcements
+            .receive(on: RunLoop.main)
+            .sink { [weak self] announcement in self?.announce(announcement) }
             .store(in: &cancellables)
 
         // Keep the clickable area in step with what's actually drawn.
@@ -297,34 +303,31 @@ final class OrbController {
 
     // MARK: - Attention
 
-    private var lastAttentionKey = ""
-
+    /// Keeps the steady indicators (count, amber) in step with the list. What
+    /// deserves a pill and a sound is not decided here — the store's attention
+    /// ledger does that, so a reorder of the waiting list or a prompt overlay
+    /// flickering underneath can never re-alert on its own.
     private func apply(_ sessions: [Session]) {
-        let waiting = sessions.filter(\.needsAttention)
-        model.attention = waiting.count
+        model.attention = sessions.filter(\.needsAttention).count
+        if model.attention == 0 { model.pulsing = false }
+    }
 
-        // Only grow on a *new* call for attention, not on every poll.
-        guard let top = waiting.first else {
-            lastAttentionKey = ""
-            model.pulsing = false
-            return
-        }
-        let key = "\(top.id)|\(top.state.rawValue)"
-        guard key != lastAttentionKey else { return }
-        lastAttentionKey = key
+    /// Something genuinely new. One pill, one sound, however many sessions it
+    /// covers.
+    private func announce(_ announcement: AttentionAnnouncement) {
+        guard AppSettings.shared.presentation == .orb else { return }
         guard !model.listOpen else { return }   // already looking at it
-        let name = top.name.count > 26 ? top.name.prefix(26) + "…" : top.name[...]
-        expand(message: "\(name) — \(top.state.label)")
-        playSound(for: top.state)
+        playSound(permission: announcement.isPermission)
+        guard panel.isVisible else { return }   // hidden orb still gets the sound
+        expand(message: announcement.message)
     }
 
     /// The orb owns its own alert sound: in orb mode the menu-bar toast path is
     /// switched off, and the sound used to live there.
-    private func playSound(for state: SessionState) {
+    private func playSound(permission: Bool) {
         guard AppSettings.shared.soundEnabled else { return }
-        let name = (state == .waitingPermission || state == .error)
-            ? AppSettings.shared.permissionSound
-            : AppSettings.shared.waitingSound
+        let name = permission ? AppSettings.shared.permissionSound
+                              : AppSettings.shared.waitingSound
         NSSound(named: name)?.play()
     }
 

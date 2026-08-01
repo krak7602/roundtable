@@ -65,7 +65,12 @@ final class MenuBarController: NSObject {
                 self?.openSettings()
             }))
 
-        store.onAttentionEdge = { [weak self] session in self?.enqueue(session) }
+        // What deserves a toast is decided by the store's attention ledger,
+        // shared with the orb; this controller only renders its share.
+        store.announcements
+            .receive(on: RunLoop.main)
+            .sink { [weak self] announcement in self?.announce(announcement) }
+            .store(in: &cancellables)
 
         store.$sessions
             .receive(on: RunLoop.main)
@@ -241,59 +246,34 @@ final class MenuBarController: NSObject {
         }
     }
 
-    /// Surface permission prompts from either harness. Turn-end/idle is already
-    /// caught by polling, so we only act on permission events here (no dupes).
-    /// Claude Code sends a `Notification` whose message mentions permission. Codex
-    /// sends `PermissionRequest`, which fires only when an approval is needed.
+    /// Record permission prompts from either harness; the toast, if one is due,
+    /// comes back through the store's attention ledger like every other alert.
+    /// Recording is all this does — the ledger is what keeps a Claude re-nudge
+    /// of a prompt you have already been told about from dinging again.
+    /// Claude Code sends a `Notification` whose message mentions permission.
+    /// Codex sends `PermissionRequest`, which fires only when approval is needed.
     private func handleHookEvent(event: String, cwd: String, message: String,
                                  sessionId: String, toolName: String, command: String?,
                                  dedupeId: String) {
-        let session = store.sessions.first { $0.id == sessionId || $0.cwd == cwd }
-        let name = session?.name ?? (cwd.isEmpty ? "session" : (cwd as NSString).lastPathComponent)
-        let harness = session?.harness ?? .claudeCode   // Notification is Claude; PermissionRequest usually resolves via cwd
-        let key = dedupeId.isEmpty ? "\(sessionId)|\(toolName)|\(message)" : dedupeId
-
         let isPermission = (event == "Notification" && message.range(of: "permission", options: .caseInsensitive) != nil)
             || event == "PermissionRequest"
         guard isPermission else { return }
 
-        // Record the actionable prompt (drives the Allow/Deny/Jump row) even when
-        // the toast is suppressed as a repeat, so the buttons persist in the menu.
+        let session = store.sessions.first { $0.id == sessionId || $0.cwd == cwd }
+        let harness = session?.harness ?? .claudeCode   // Notification is Claude; PermissionRequest usually resolves via cwd
+        let key = dedupeId.isEmpty ? "\(sessionId)|\(toolName)|\(message)" : dedupeId
         store.recordApproval(id: key, sessionId: sessionId, cwd: cwd, harness: harness, tool: toolName, command: command)
-
-        guard !suppressRepeat(key) else { return }
-        let tool = toolName.isEmpty ? "a command" : toolName
-        let text = event == "PermissionRequest" ? "\(name) — approve \(tool)?" : "\(name) — needs permission"
-        firePermissionToast(text: text, cwd: cwd, name: name)
     }
 
-    /// Fire the permission toast, unless the user asked us to defer to a terminal
-    /// that notifies on its own (muxy) — checked off-main since it locates the pane.
-    private func firePermissionToast(text: String, cwd: String, name: String) {
-        guard AppSettings.shared.deferTerminalNotifications, !cwd.isEmpty else {
-            enqueueRaw(text: text, accent: .attention, cwd: cwd, name: name)
-            return
-        }
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let selfNotifies = ProcessCorrelator.terminalSelfNotifies(cwd: cwd)
-            Task { @MainActor in
-                guard let self, !selfNotifies else { return }
-                self.enqueueRaw(text: text, accent: .attention, cwd: cwd, name: name)
-            }
-        }
-    }
-
-    /// Toast a given prompt once, then allow a re-nudge only after the window has
-    /// passed, so an unanswered prompt reminds you periodically without spamming.
-    private var lastToasted: [String: Date] = [:]
-    private let renudgeWindow: TimeInterval = 120
-
-    private func suppressRepeat(_ key: String) -> Bool {
-        let now = Date()
-        lastToasted = lastToasted.filter { now.timeIntervalSince($0.value) < renudgeWindow }
-        if let last = lastToasted[key], now.timeIntervalSince(last) < renudgeWindow { return true }
-        lastToasted[key] = now
-        return false
+    /// Render an announcement as a toast. A multi-session announcement (the
+    /// coalesced wake summary, or several agents finishing in one poll) gets one
+    /// toast with no jump target — clicking it opens the list instead.
+    private func announce(_ announcement: AttentionAnnouncement) {
+        guard isActive else { return }
+        let single = announcement.sessions.count == 1 ? announcement.sessions[0] : nil
+        enqueueRaw(text: announcement.message,
+                   accent: announcement.isPermission ? .attention : .ready,
+                   cwd: single?.cwd ?? "", name: single?.name ?? "")
     }
 
     private func enqueueRaw(text: String, accent: ToastStatusView.Accent, cwd: String = "", name: String = "") {
@@ -304,16 +284,6 @@ final class MenuBarController: NSObject {
     }
 
     // MARK: - Toast queue
-
-    private func enqueue(_ session: Session) {
-        let accent: ToastStatusView.Accent = (session.state == .waitingPermission || session.state == .error) ? .attention : .ready
-        let toast = ToastStatusView.Toast(
-            text: "\(session.name) — \(session.state.label)", accent: accent,
-            focusCWD: session.cwd, focusName: session.name)
-        if queue.contains(where: { $0.text == toast.text }) { return }   // coalesce dupes
-        queue.append(toast)
-        if !showingToast { showNext() }
-    }
 
     private func showNext() {
         guard isActive else { queue.removeAll(); return }

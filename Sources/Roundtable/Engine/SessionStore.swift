@@ -1,5 +1,30 @@
 import Foundation
 import SwiftUI
+import Combine
+
+/// One user-facing alert: the sessions that newly need attention this pass.
+///
+/// Batched per poll, so three agents finishing together is one announcement
+/// rather than three sounds. `isBaseline` marks the first look after launch or
+/// wake — everything that changed while nobody was watching arrives as a single
+/// summary instead of a burst of stale, individually-narrated events.
+struct AttentionAnnouncement: Sendable {
+    let sessions: [Session]
+    let isBaseline: Bool
+
+    /// Drives the accent and the sound: a blocking prompt outranks a wait.
+    var isPermission: Bool {
+        sessions.contains { $0.state == .waitingPermission || $0.state == .error }
+    }
+
+    var message: String {
+        if sessions.count == 1, let s = sessions.first {
+            let name = s.name.count > 26 ? s.name.prefix(26) + "…" : s.name[...]
+            return "\(name) — \(s.state.label)"
+        }
+        return "\(sessions.count) sessions need you"
+    }
+}
 
 /// The spine. Owns the adapters, polls them on a background queue, publishes the
 /// normalized session list to the UI, and detects state transitions worth a
@@ -23,13 +48,24 @@ final class SessionStore: ObservableObject {
     private var timer: Timer?
     private let scanQueue = DispatchQueue(label: "roundtable.scan", qos: .utility)
 
-    /// Called on the *edge* into an attention state (not every poll). The
-    /// menu-bar controller uses this to enqueue a transient in-place toast,
-    /// which is deliberately not a focus-stealing macOS notification.
-    var onAttentionEdge: ((Session) -> Void)?
+    /// Everything worth telling the user, decided in one place. The orb and the
+    /// menu bar both subscribe and only render; neither keeps its own idea of
+    /// what is new — two competing dedupe maps is exactly how the same prompt
+    /// used to alert twice.
+    let announcements = PassthroughSubject<AttentionAnnouncement, Never>()
 
-    /// Remember the last state we saw per session, so we only fire on the edge.
-    private var lastState: [String: SessionState] = [:]
+    /// The attention episodes already told to the user: session id → the state
+    /// announced. An episode spans one continuous stretch of `needsAttention`;
+    /// within it a session is announced once, plus once more if a wait escalates
+    /// into a permission prompt. De-escalation keeps the recorded state, so the
+    /// prompt-TTL-expires / re-nudge-restores cycle can never read as news again.
+    /// The episode ends only when the session stops needing attention.
+    private var announced: [String: SessionState] = [:]
+
+    /// Set at launch and on wake: the next pass is a resync of what happened
+    /// while nobody was watching, so it coalesces into one summary.
+    private var baselinePending = true
+    private var lastApplyAt: Date?
 
     init(adapters: [any HarnessAdapter] = [
             ClaudeCodeAdapter(),
@@ -63,6 +99,11 @@ final class SessionStore: ObservableObject {
             command: command ?? existing?.command,
             createdAt: existing?.createdAt ?? now, lastSeen: now,
             canAnswer: existing?.canAnswer ?? false)
+
+        // Fold the prompt into the session list right away: the hook no longer
+        // fires a toast of its own (the ledger in apply() owns that call), so
+        // without this poke the alert would wait out the rest of the poll tick.
+        refresh()
 
         let needsCommand = command?.isEmpty ?? true
         // Off a throwaway queue, not the poll queue: the retry below can sleep up
@@ -98,6 +139,16 @@ final class SessionStore: ObservableObject {
     }
 
     func start(interval: TimeInterval = 2.0) {
+        // Wake = the user was away. The gap heuristic in announce() catches this
+        // too (the timer doesn't tick through sleep), but the explicit signal is
+        // free and covers short naps the threshold would miss.
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification] {
+            NSWorkspace.shared.notificationCenter.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.baselinePending = true }
+            }
+        }
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
@@ -168,20 +219,11 @@ final class SessionStore: ObservableObject {
         // Respect per-harness visibility from settings.
         let visible = scanned.filter { AppSettings.shared.isEnabled($0.harness) }
 
-        // Edge detection runs on the RAW transcript state, so overlaying a
-        // pending prompt below never double-fires the toast the hook already sent.
-        var next: [String: SessionState] = [:]
-        for s in visible {
-            let previous = lastState[s.id]
-            if previous != s.state, s.state.needsAttention, previous != nil {
-                onAttentionEdge?(s)
-            }
-            next[s.id] = s.state
-        }
-        lastState = next   // prune ids that are no longer live
-
         // Drop resolved/dead prompts, then overlay the survivors so the row goes
-        // red and carries the Allow/Deny bar, matching the toast the hook fired.
+        // red and carries the Allow/Deny bar. Announcements are computed from
+        // the *overlaid* state: a prompt arriving through a hook and the same
+        // session's transcript state flow through one ledger, so they can never
+        // produce two separate alerts for one event.
         pruneApprovals(live: visible)
         let overlaid = visible.map { s -> Session in
             guard pendingApproval(for: s) != nil else { return s }
@@ -192,6 +234,66 @@ final class SessionStore: ObservableObject {
         self.sessions = overlaid.sorted { a, b in
             if a.needsAttention != b.needsAttention { return a.needsAttention }
             return a.updatedAt > b.updatedAt
+        }
+
+        announce(overlaid)
+    }
+
+    /// Decide what, if anything, this pass is worth telling the user — the one
+    /// place that decision is made. Fires per attention *episode*, so neither
+    /// list reordering nor a prompt overlay flickering under a still-waiting
+    /// session can re-announce something the user has already been told.
+    private func announce(_ sessions: [Session]) {
+        // The poll timer doesn't tick through sleep, so a long gap between
+        // passes means the machine was away: what changed meanwhile is pent-up
+        // news, not breaking news.
+        if let last = lastApplyAt, Date().timeIntervalSince(last) > 30 { baselinePending = true }
+        lastApplyAt = Date()
+
+        var fresh: [Session] = []
+        for s in sessions where s.needsAttention {
+            switch announced[s.id] {
+            case nil:
+                fresh.append(s)                          // a new episode
+                announced[s.id] = s.state
+            case .waitingInput where s.state == .waitingPermission:
+                fresh.append(s)                          // escalation is news
+                announced[s.id] = .waitingPermission
+            default:
+                break                                    // already told; stay quiet
+            }
+        }
+        // Episodes end when the session stops needing attention (or goes away).
+        // The next time it needs the user is genuinely new, and announces.
+        let inAttention = Set(sessions.filter(\.needsAttention).map(\.id))
+        announced = announced.filter { inAttention.contains($0.key) }
+
+        let isBaseline = baselinePending
+        baselinePending = false
+        guard !fresh.isEmpty else { return }
+        deliver(AttentionAnnouncement(sessions: fresh, isBaseline: isBaseline))
+    }
+
+    /// Emit, minus anything the user asked their terminal to announce instead.
+    /// The ledger has already recorded these as announced either way — muxy
+    /// telling the user still counts as the user being told.
+    private func deliver(_ announcement: AttentionAnnouncement) {
+        guard AppSettings.shared.deferTerminalNotifications else {
+            announcements.send(announcement)
+            return
+        }
+        // Off-main: locating the pane shells out.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            // Only permission prompts are covered by muxy's own hook
+            // notification; plain turn-ends still come from us.
+            let kept = announcement.sessions.filter {
+                !($0.state == .waitingPermission && ProcessCorrelator.terminalSelfNotifies(cwd: $0.cwd))
+            }
+            guard !kept.isEmpty else { return }
+            Task { @MainActor in
+                self?.announcements.send(
+                    AttentionAnnouncement(sessions: kept, isBaseline: announcement.isBaseline))
+            }
         }
     }
 
