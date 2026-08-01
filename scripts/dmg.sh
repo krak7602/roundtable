@@ -87,7 +87,20 @@ fi
 
 # Finder writes .DS_Store lazily; detaching too early loses the layout.
 sync
-hdiutil detach "/Volumes/$VOLUME" >/dev/null
+
+# Finder can still be holding the volume when we ask for it back, which fails
+# with "Resource busy" — a race, so it passes most of the time and then doesn't.
+# Retry before resorting to -force, since a forced eject risks losing the
+# .DS_Store we just went to the trouble of writing.
+detached=no
+for attempt in 1 2 3 4 5; do
+  if hdiutil detach "/Volumes/$VOLUME" >/dev/null 2>&1; then detached=yes; break; fi
+  sleep "$attempt"
+done
+if [[ "$detached" == "no" ]]; then
+  echo "::warning::volume still busy after 15s — forcing the eject"
+  hdiutil detach "/Volumes/$VOLUME" -force >/dev/null
+fi
 
 echo "[dmg] compressing"
 hdiutil convert "$RW" -format UDZO -imagekey zlib-level=9 -o "$DMG" >/dev/null
