@@ -65,6 +65,11 @@ a { color: inherit; text-decoration: none; }
   padding: 11px 0;
 }
 .nav-links a:not(.btn):hover { color: var(--text); }
+/* The repo link is a primary destination for this audience, so it gets the
+   mark. Scoped class, not a display change on all links — a previous nav
+   regression came from exactly that (inline-flex outranking .hide-sm). */
+.nav-links .gh { display: inline-flex; align-items: center; gap: 6px; }
+.nav-links .gh svg { flex: none; opacity: 0.85; }
 
 /* --- buttons --- */
 .btn {
